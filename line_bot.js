@@ -1,6 +1,6 @@
 /**
- * 覺風物資管理系統 - 全網最防呆點選版 LINE Bot (階層化據點分流版)
- * 流程：先選據點(大安/永修/北投) -> 選場域 -> 選櫃位 -> 選層格 -> 搜尋物資 -> 輸入數量
+ * 覺風物資管理系統 - 全網最防呆點選版 LINE Bot (三層空間定位版)
+ * 流程：選據點(大安) -> 選樓層(1樓/B1) -> 選空間(展示區/接待區) -> 選櫃位 -> 選層格 -> 搜尋物資 -> 輸入數量
  */
 
 // ==================== 全局配置 ====================
@@ -106,31 +106,48 @@ function handleLineMessage(event) {
   const session = JSON.parse(cachedState);
   
   switch (session.state) {
-    // 🏛️ 狀態 0：志工點選了「據點」（例如：大安）
+    // 🏛️ 狀態 0：志工點選了「據點」（例如：大安） ➔ 前往選擇「樓層」
     case 'STATE_CHOOSE_SITE':
       const selectedSite = userMessage;
-      const locationsInSite = getLocationsBySite(selectedSite);
+      const floors = getFloorsBySite(selectedSite);
       
-      if (locationsInSite.length === 0) {
+      if (floors.length === 0) {
         const sites = getAllSites();
-        replyQuickReplySites(replyToken, myName, sites, `⚠️ 找不到「${selectedSite}」底下的場域配置，請重新選擇據點：`);
+        replyQuickReplySites(replyToken, myName, sites, `⚠️ 找不到「${selectedSite}」底下的樓層配置，請重新選擇據點：`);
+        return;
+      }
+      
+      session.state = 'STATE_CHOOSE_FLOOR';
+      session.siteName = selectedSite;
+      cache.put(lineUid, JSON.stringify(session), 1200);
+      replyQuickReplyFloors(replyToken, selectedSite, floors);
+      break;
+
+    // 🏢 狀態 0.5：志工點選了「樓層」（例如：1樓 或 B1） ➔ 前往選擇「詳細空間/展示區」
+    case 'STATE_CHOOSE_FLOOR':
+      const selectedFloor = userMessage;
+      const details = getDetailsBySiteAndFloor(session.siteName, selectedFloor);
+      
+      if (details.length === 0) {
+        const floorsInSite = getFloorsBySite(session.siteName || "");
+        replyQuickReplyFloors(replyToken, session.siteName, floorsInSite, `⚠️ 找不到「${session.siteName} ${selectedFloor}」的空間配置，請重新選擇樓層：`);
         return;
       }
       
       session.state = 'STATE_CHOOSE_LOC';
-      session.siteName = selectedSite;
+      session.floorName = selectedFloor;
       cache.put(lineUid, JSON.stringify(session), 1200);
-      replyQuickReplyLocations(replyToken, selectedSite, locationsInSite);
+      replyQuickReplyDetails(replyToken, session.siteName, selectedFloor, details);
       break;
 
-    // 🏢 狀態 1：志工點選了「特定場域」（例如：DA-004）
+    // 📍 狀態 1：志工點選了「詳細空間」（例如：展示區，傳回 DA-001） ➔ 前往選擇「櫃位」
     case 'STATE_CHOOSE_LOC':
       const locId = userMessage.toUpperCase();
       const zones = getZonesByLocation(locId); 
       
       if (zones.length === 0) {
-        const currentLocs = getLocationsBySite(session.siteName || "");
-        replyQuickReplyLocations(replyToken, session.siteName, currentLocs, `⚠️ 找不到場域 "${userMessage}" 下的儲位明細。請重新點選：`);
+        const currentDetails = getDetailsBySiteAndFloor(session.siteName || "", session.floorName || "");
+        replyQuickReplyDetails(replyToken, session.siteName, session.floorName, currentDetails, `⚠️ 找不到空間編號 "${userMessage}" 下的儲位明細。請重新點選：`);
         return;
       }
       
@@ -140,7 +157,7 @@ function handleLineMessage(event) {
       replyQuickReplyZones(replyToken, locId, zones);
       break;
 
-    // 🗄️ 狀態 2：志工點選了「儲位分區」（例如：DA-004-Z04）
+    // 🗄️ 狀態 2：志工點選了「儲位分區」（例如：DA-004-Z04） ➔ 前往選擇「櫃子」
     case 'STATE_CHOOSE_ZONE':
       const zoneId = userMessage.toUpperCase();
       const boxes = parseBoxesFromZone(zoneId);
@@ -158,7 +175,7 @@ function handleLineMessage(event) {
       replyQuickReplyBoxes(replyToken, zoneId, boxes);
       break;
       
-    // 🗃️ 狀態 3：志工點選了「櫃子」（例如：B19）
+    // 🗃️ 狀態 3：志工點選了「櫃子」（例如：B19） ➔ 前往選擇「層格」
     case 'STATE_CHOOSE_BOX':
       const selectedBoxId = userMessage.split('-')[0].toUpperCase().trim();
       const shelves = parseShelvesFromBox(session.zoneId, selectedBoxId);
@@ -176,7 +193,7 @@ function handleLineMessage(event) {
       replyQuickReplyShelves(replyToken, selectedBoxId, shelves);
       break;
       
-    // 📍 狀態 4：點選最底層微細層格 (例如：DA-004-Z04#B19-S1)
+    // 📍 狀態 4：點選最底層微細層格 (例如：DA-004-Z04#B19-S1) ➔ 請志工搜尋物資
     case 'STATE_CHOOSE_CELL':
       let cellCode = userMessage.toUpperCase().trim();
       if (cellCode.includes('：')) {
@@ -255,7 +272,7 @@ function handleLineMessage(event) {
 // ==================== 資料庫讀取與層級解析核心 ====================
 
 /**
- * 抓取所有不重複的「據點」清單 (例如：大安、永修、北投)
+ * 1. 抓取所有不重複的「據點」清單 (例如：大安、永修、北投)
  */
 function getAllSites() {
   const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
@@ -270,17 +287,42 @@ function getAllSites() {
   const siteSet = new Set();
   for (let i = 1; i < data.length; i++) {
     const site = data[i][siteIdx] ? data[i][siteIdx].toString().trim() : "";
-    if (site) {
-      siteSet.add(site);
-    }
+    if (site) siteSet.add(site);
   }
   return Array.from(siteSet);
 }
 
 /**
- * 依據選定的「據點」，抓取旗下的場域清單
+ * 2. 依據「據點」，抓取旗下的不重複「樓層」清單 (例如：1樓、B1)
  */
-function getLocationsBySite(siteName) {
+function getFloorsBySite(siteName) {
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const sheet = ss.getSheetByName("LOC_MASTER");
+  if (!sheet) return [];
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0];
+  
+  const siteIdx = headers.indexOf("據點");
+  const floorIdx = headers.indexOf("樓層");
+  
+  if (siteIdx === -1 || floorIdx === -1) return [];
+  
+  const floorSet = new Set();
+  for (let i = 1; i < data.length; i++) {
+    const currentSite = data[i][siteIdx] ? data[i][siteIdx].toString().trim() : "";
+    const floor = data[i][floorIdx] ? data[i][floorIdx].toString().trim() : "";
+    
+    if (currentSite === siteName && floor) {
+      floorSet.add(floor);
+    }
+  }
+  return Array.from(floorSet);
+}
+
+/**
+ * 3. 依據「據點 + 樓層」，抓取旗下的「詳細空間/展示區」清單
+ */
+function getDetailsBySiteAndFloor(siteName, floorName) {
   const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
   const sheet = ss.getSheetByName("LOC_MASTER");
   if (!sheet) return [];
@@ -292,32 +334,28 @@ function getLocationsBySite(siteName) {
   const floorIdx = headers.indexOf("樓層");
   const descIdx = headers.indexOf("儲位詳細說明");
   
-  const locations = [];
+  const details = [];
   for (let i = 1; i < data.length; i++) {
     if (data[i][idIdx]) {
       const locId = data[i][idIdx].toString().trim();
       const currentSite = siteIdx !== -1 && data[i][siteIdx] ? data[i][siteIdx].toString().trim() : "";
+      const currentFloor = floorIdx !== -1 && data[i][floorIdx] ? data[i][floorIdx].toString().trim() : "";
       
-      // 僅篩選出符合該據點的場域
-      if (currentSite === siteName) {
-        const floorName = floorIdx !== -1 && data[i][floorIdx] ? data[i][floorIdx].toString().trim() : "";
-        const detailDesc = descIdx !== -1 && data[i][descIdx] ? data[i][descIdx].toString().trim() : "";
-        
-        // 組合出按鈕顯示名稱：例如「1樓展示區」或「B1小教室」
-        let displayName = `${floorName}${detailDesc}`;
-        if (!displayName) {
+      if (currentSite === siteName && currentFloor === floorName) {
+        let spaceName = descIdx !== -1 && data[i][descIdx] ? data[i][descIdx].toString().trim() : "";
+        if (!spaceName) {
           const nameIdx = headers.indexOf("場域名稱");
-          displayName = (nameIdx !== -1 && data[i][nameIdx]) ? data[i][nameIdx].toString().trim() : locId;
+          spaceName = (nameIdx !== -1 && data[i][nameIdx]) ? data[i][nameIdx].toString().trim() : locId;
         }
         
-        locations.push({
+        details.push({
           loc_id: locId,
-          loc_name: displayName
+          space_name: spaceName
         });
       }
     }
   }
-  return locations;
+  return details;
 }
 
 function getZonesByLocation(locId) {
@@ -618,17 +656,35 @@ function replyQuickReplySites(replyToken, userName, sites, customText) {
 }
 
 /**
- * 1. 噴出「場域選擇」按鈕 (該據點旗下的 1樓展示區、B1小教室等)
+ * 0.5 噴出「樓層選擇」按鈕 (1樓、B1等)
  */
-function replyQuickReplyLocations(replyToken, siteName, locations, customText) {
-  const displayText = customText || `🏛️ 已選擇據點：${siteName}\n請點選具體【所在場域/樓層】：`;
-  const items = locations.slice(0, 13).map(loc => {
+function replyQuickReplyFloors(replyToken, siteName, floors, customText) {
+  const displayText = customText || `🏛️ 已選擇據點：${siteName}\n請點選所在【樓層】：`;
+  const items = floors.slice(0, 13).map(floor => {
     return {
       type: "action",
       action: {
         type: "message",
-        label: loc.loc_name.length > 17 ? loc.loc_name.substring(0, 14) + "..." : loc.loc_name,
-        text: loc.loc_id
+        label: floor.length > 17 ? floor.substring(0, 14) + "..." : floor,
+        text: floor
+      }
+    };
+  });
+  sendToLine({ replyToken: replyToken, messages: [{ type: "text", text: displayText, quickReply: { items: items } }] });
+}
+
+/**
+ * 1. 噴出「詳細空間」按鈕 (展示區、接待區、小教室等)
+ */
+function replyQuickReplyDetails(replyToken, siteName, floorName, details, customText) {
+  const displayText = customText || `🏢 已選擇：${siteName} ${floorName}\n請點選具體【空間/展示區】：`;
+  const items = details.slice(0, 13).map(d => {
+    return {
+      type: "action",
+      action: {
+        type: "message",
+        label: d.space_name.length > 17 ? d.space_name.substring(0, 14) + "..." : d.space_name,
+        text: d.loc_id // 發送場域代碼，如 DA-001
       }
     };
   });
