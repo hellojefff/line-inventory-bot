@@ -1,10 +1,10 @@
 /**
- * 覺風物資管理系統 - 全網最防呆點選版 LINE Bot (盤點說明手冊完整版)
+ * 覺風物資管理系統 - 全網最防呆點選版 LINE Bot (在地親切文案優化版)
  * 核心升級：
- * 1. 支援圖文選單「📖 盤點說明」大字指南卡片
- * 2. 模式 1：依據 [儲位格位代碼 + 品項編號] 獨立管理庫存
- * 3. 支援「即時更正（改名/改量/刪除）」與小和尚溫馨提示
- * 4. 結束盤點支援 GitHub finish.png 圖文感謝推播
+ * 1. 潤飾身份驗證相關文案，去除「活化」、「固化」等生硬用語，改用親切自然的在地志工語氣
+ * 2. 支援「📖 盤點說明」指南手冊卡片
+ * 3. 模式 1：依據 [儲位格位代碼 + 品項編號] 獨立管理庫存
+ * 4. 支援即時補救更正（改名/改量/刪除）與結束盤點 finish.png 圖文推播
  */
 
 // ==================== 全局配置 ====================
@@ -76,7 +76,7 @@ function handleLineMessage(event) {
   // 🔍 撈取人員物件
   let currentVolunteer = getVolunteerByLineUid(lineUid);
   
-  // 👥 狀態 A：尚未綁定者強制進入實名綁定
+  // 👥 狀態 A：尚未綁定者強制進入實名認證流程 (文案優化)
   if (!currentVolunteer) {
     if (cachedState) {
       const session = JSON.parse(cachedState);
@@ -86,7 +86,7 @@ function handleLineMessage(event) {
         session.inputName = userMessage; 
         cache.put(lineUid, JSON.stringify(session), 1200);
         
-        replyTextMessage(replyToken, `📝 已收到姓名：${userMessage}\n\n第二步：請輸入您建檔時登記的【手機號碼】末 4 碼（或完整 10 碼）進行雙重比對：`);
+        replyTextMessage(replyToken, `📝 已收到姓名：${userMessage}\n\n第二步：請輸入您在建檔時登記的【手機號碼】末 4 碼（或完整 10 碼）進行身份比對：`);
         return;
       }
       
@@ -97,23 +97,23 @@ function handleLineMessage(event) {
     }
     
     cache.put(lineUid, JSON.stringify({ state: 'STATE_BINDING_NAME' }), 1200); 
-    replyTextMessage(replyToken, "🔒 您好，偵測到您的 LINE 尚未活化「覺風物資管理系統」身份。\n\n請先進行雙重實名認證。\n\n第一步：請輸入您的【人員姓名】：");
+    replyTextMessage(replyToken, "🙏 您好！歡迎使用「覺風物資管理系統」。\n\n為確保物資紀錄正確，請先進行志工身份認證。\n\n第一步：請輸入您的【人員姓名】：");
     return;
   }
 
-  // 👑 狀態 B：已完成實名綁定
+  // 👑 狀態 B：已完成身份認證
   const myUserId = currentVolunteer['人員編號'];
   const myName = currentVolunteer['人員姓名'];
   const myDept = currentVolunteer['隸屬組織/部門'] || "基本志工";
   const myTitle = currentVolunteer['職稱/身份'] || "志工";
 
-  // 👤 點擊圖文選單的「身份綁定」
+  // 👤 點擊圖文選單的「身份綁定」(🌟 文案全新潤飾)
   if (userMessage === '綁定身份') {
-    replyTextMessage(replyToken, `💡 溫馨提示：\n${myName} 您好，系統確認您已完成實名活化！\n\n編號：[${myUserId}]\n單位：${myDept}\n職稱：${myTitle}\n\n權限已固化，無需重複綁定。請直接點選下方「📷 開始盤點」開始作業！`);
+    replyTextMessage(replyToken, `💡 溫馨提醒：\n${myName} 您好，您已完成志工身份認證！\n\n編號：[${myUserId}]\n單位：${myDept}\n職稱：${myTitle}\n\n您的盤點權限已開通，不需重複認證。請直接點選下方「📷 開始盤點」即可開始作業囉！🙏`);
     return;
   }
 
-  // 📖 🌟 核心升級：點擊「盤點說明」時發送大字指南手冊卡片
+  // 📖 點擊「盤點說明」時發送大字指南手冊卡片
   if (userMessage === '盤點說明' || userMessage === '說明' || userMessage.toLowerCase() === 'help') {
     replyFlexManualCard(replyToken, myName);
     return;
@@ -1035,7 +1035,7 @@ function getRawJsonString(zoneId) {
   return "";
 }
 
-// ==================== 身份驗證與雙重實名綁定 ====================
+// ==================== 身份驗證與雙重實名認證 ====================
 function getVolunteerByLineUid(lineUid) {
   const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
   const sheet = ss.getSheetByName("USER_MASTER");
@@ -1120,7 +1120,8 @@ function processDualBinding(replyToken, lineUid, inputName, inputPhone) {
   sheet.getRange(finalTarget.rowIndex, uidIdx + 1).setValue(lineUid);
   CacheService.getUserCache().remove(lineUid);
   
-  replyTextMessage(replyToken, `🎉 雙重實名綁定成功！\n\n歡迎 ${inputName} (編號: ${finalTarget.userId}) 釋出庫存權限！\n\n請點擊圖文選單的「📷 開始盤點」開始流程。`);
+  // 🌟 文案優化：親切開通提示
+  replyTextMessage(replyToken, `🎉 志工身份認證成功！\n\n歡迎 ${inputName} (編號: ${finalTarget.userId})！已為您開通盤點權限。\n\n請點擊圖文選單的「📷 開始盤點」即可開始作業囉！🙏`);
 }
 
 function findSKU(keyword) {
@@ -1184,9 +1185,6 @@ function replyTextMessage(replyToken, text) {
   sendToLine({ replyToken: replyToken, messages: [{ type: 'text', text: text }] });
 }
 
-/**
- * 🌟 核心新增：盤點說明大字指南手冊卡片
- */
 function replyFlexManualCard(replyToken, userName) {
   const flexContents = {
     "type": "bubble",
@@ -1204,7 +1202,6 @@ function replyFlexManualCard(replyToken, userName) {
       "layout": "vertical",
       "spacing": "md",
       "contents": [
-        // 步驟 1
         {
           "type": "box",
           "layout": "vertical",
@@ -1218,7 +1215,6 @@ function replyFlexManualCard(replyToken, userName) {
             { "type": "text", "text": "點選 據點 ➔ 樓層 ➔ 空間 ➔ 櫃子 ➔ 具體層格。", "size": "sm", "color": "#4B5563", "margin": "xs", "wrap": true }
           ]
         },
-        // 步驟 2
         {
           "type": "box",
           "layout": "vertical",
@@ -1232,7 +1228,6 @@ function replyFlexManualCard(replyToken, userName) {
             { "type": "text", "text": "在對話框直接打入【書名或用品名稱】進行比對。若為全新物品，點擊按鈕即可一鍵建檔。", "size": "sm", "color": "#4B5563", "margin": "xs", "wrap": true }
           ]
         },
-        // 步驟 3
         {
           "type": "box",
           "layout": "vertical",
@@ -1246,7 +1241,6 @@ function replyFlexManualCard(replyToken, userName) {
             { "type": "text", "text": "輸入眼前看到的實際數量（如：5），系統即刻更新該格位庫存！", "size": "sm", "color": "#4B5563", "margin": "xs", "wrap": true }
           ]
         },
-        // 溫馨貼士
         {
           "type": "box",
           "layout": "vertical",
