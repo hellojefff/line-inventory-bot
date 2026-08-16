@@ -1,6 +1,6 @@
 /**
- * 覺風物資管理系統 - 全網最防呆點選版 LINE Bot (完整品名自訂建檔與查重版)
- * 核心升級：查無物資時支援「自訂輸入完整品名規格」、「快速簡稱建檔」與「同名查重防呆」
+ * 覺風物資管理系統 - 全網最防呆點選版 LINE Bot (同櫃換層專用導航版)
+ * 核心升級：盤點完成卡片新增「🚪 盤點同櫃子其他層格」按鈕，同櫃連續盤點一鍵切換
  */
 
 // ==================== 全局配置 ====================
@@ -10,6 +10,7 @@ const BTN_BACK_PREFIX = '↩️ 返回';
 
 // 連續盤點與建檔指令常數
 const CMD_NEXT_SKU_SAME_CELL = 'CMD_NEXT_SKU_SAME_CELL';
+const CMD_CHANGE_SHELF_SAME_BOX = 'CMD_CHANGE_SHELF_SAME_BOX'; // 🌟 核心新增：同櫃換層指令
 const CMD_CHANGE_BOX_SAME_ROOM = 'CMD_CHANGE_BOX_SAME_ROOM';
 const CMD_CHANGE_SITE = 'CMD_CHANGE_SITE';
 const CMD_CREATE_SKU_CONFIRM = 'CMD_CREATE_SKU_CONFIRM';
@@ -257,10 +258,9 @@ function handleLineMessage(event) {
     case 'STATE_INPUT_SKU':
       const skus = findSKU(userMessage);
       
-      // 💡 查無品項：引導選擇「自訂輸入完整品名」或「直接以關鍵字建檔」
       if (skus.length === 0) {
         session.state = 'STATE_CONFIRM_CREATE_SKU';
-        session.pendingItemName = userMessage; // 暫存剛才輸入的關鍵字
+        session.pendingItemName = userMessage;
         cache.put(lineUid, JSON.stringify(session), 1200);
 
         replyFlexCreateSkuCard(replyToken, userMessage);
@@ -284,14 +284,12 @@ function handleLineMessage(event) {
 
     // ➕ 狀態 5.5：確認建檔選擇分流
     case 'STATE_CONFIRM_CREATE_SKU':
-      // 選擇 1：直接以簡短關鍵字建檔
       if (userMessage === CMD_CREATE_SKU_CONFIRM) {
         const newItemName = session.pendingItemName;
         executeCreateSkuAndProceed(replyToken, lineUid, session, newItemName);
         return;
       }
 
-      // 選擇 2：自訂輸入完整品名
       if (userMessage === CMD_INPUT_DETAILED_SKU) {
         session.state = 'STATE_INPUT_FULL_SKU_NAME';
         cache.put(lineUid, JSON.stringify(session), 1200);
@@ -299,7 +297,6 @@ function handleLineMessage(event) {
         return;
       }
 
-      // 選擇 3：重新搜尋
       if (userMessage === CMD_RETRY_SEARCH_SKU) {
         session.state = 'STATE_INPUT_SKU';
         cache.put(lineUid, JSON.stringify(session), 1200);
@@ -307,15 +304,13 @@ function handleLineMessage(event) {
         return;
       }
 
-      // 防呆：若志工直接輸入新的關鍵字，視為重新搜尋
       session.state = 'STATE_INPUT_SKU';
       handleLineMessage(event);
       break;
 
-    // 📝 狀態 5.6：收到志工輸入的「完整品項名稱」
+    // 📝 狀態 5.6：收到完整品項名稱
     case 'STATE_INPUT_FULL_SKU_NAME':
-      const detailedItemName = userMessage;
-      executeCreateSkuAndProceed(replyToken, lineUid, session, detailedItemName);
+      executeCreateSkuAndProceed(replyToken, lineUid, session, userMessage);
       break;
 
     // 🔢 狀態 6：輸入數量
@@ -340,7 +335,7 @@ function handleLineMessage(event) {
         cache.put(lineUid, JSON.stringify(session), 1800);
 
         const fullChineseLocation = `${session.siteName || ""} ${session.floorName || ""} ${session.spaceName || ""} - ${session.boxName || ""} (${session.shelfName || ""})`;
-        replyFlexPostStocktakeCard(replyToken, myName, fullChineseLocation, session.cellCode, session.itemName, qty);
+        replyFlexPostStocktakeCard(replyToken, myName, fullChineseLocation, session.cellCode, session.itemName, qty, session.boxName);
       } else {
         replyTextMessage(replyToken, `❌ 寫入失敗：資料庫關聯驗證未通過，請檢查人員主檔與品項主檔。`);
       }
@@ -377,18 +372,35 @@ function executeCreateSkuAndProceed(replyToken, lineUid, session, itemName) {
   replyTextMessage(replyToken, `${tipMsg}\n\n請在對話框中直接輸入本次盤點的【實清數量】數字（例如：5）：`);
 }
 
-// ==================== 連續盤點分流與純中文返回控制器 ====================
+// ==================== 連續盤點分流與同櫃換層控制器 ====================
 
 function handlePostStocktakeAction(replyToken, lineUid, session, userMessage, userName) {
   const cache = CacheService.getUserCache();
 
+  // 1. 同格位下一件
   if (userMessage === CMD_NEXT_SKU_SAME_CELL) {
     session.state = 'STATE_INPUT_SKU';
     cache.put(lineUid, JSON.stringify(session), 1800);
-    replyTextMessage(replyToken, `📍 繼續盤點目前格位：\n【${session.spaceName || ""} - ${session.boxName || ""}】\n(${session.cellCode})\n\n請開啟相機「掃描物品條碼」，或「輸入物品名稱關鍵字」進行搜尋：`);
+    replyTextMessage(replyToken, `📍 繼續盤點目前格位：\n【${session.spaceName || ""} - ${session.boxName || ""} - ${session.shelfName || ""}】\n(${session.cellCode})\n\n請開啟相機「掃描物品條碼」，或「輸入物品名稱關鍵字」進行搜尋：`);
     return;
   }
 
+  // 🌟 2. 核心新增：同櫃子換其他層格 (例如回第7櫃選其他分層)
+  if (userMessage === CMD_CHANGE_SHELF_SAME_BOX) {
+    const shelves = parseShelvesFromBox(session.zoneId || "", session.boxId || "");
+    if (shelves.length === 0) {
+      replyTextMessage(replyToken, "⚠️ 查無該櫃子的層格明細，請重新選擇櫃位。");
+      return;
+    }
+    session.state = 'STATE_CHOOSE_CELL';
+    cache.put(lineUid, JSON.stringify(session), 1800);
+    
+    const shelfItems = shelves.map(s => ({ title: `📍 ${s.name}`, desc: `格位：${s.short_code}`, value: s.cell_code }));
+    replyFlexMenuCard(replyToken, "🚪 選擇盤點層格", `已鎖定櫃體：【${session.boxName || "目前櫃子"}】\n請點選您要盤點的【分層】：`, shelfItems, `↩️ 返回 [${session.zoneName || "櫃位分區"}]`);
+    return;
+  }
+
+  // 3. 同空間換其他櫃位
   if (userMessage === CMD_CHANGE_BOX_SAME_ROOM) {
     const zones = getZonesByLocation(session.locId || "");
     if (zones.length === 0) {
@@ -402,6 +414,7 @@ function handlePostStocktakeAction(replyToken, lineUid, session, userMessage, us
     return;
   }
 
+  // 4. 更換其他據點/空間
   if (userMessage === CMD_CHANGE_SITE || userMessage === '開始盤點') {
     const sites = getAllSites();
     session.state = 'STATE_CHOOSE_SITE';
@@ -429,7 +442,6 @@ function handlePostStocktakeAction(replyToken, lineUid, session, userMessage, us
     return;
   }
 
-  // 查無品項：引導建立
   session.state = 'STATE_CONFIRM_CREATE_SKU';
   session.pendingItemName = userMessage;
   cache.put(lineUid, JSON.stringify(session), 1200);
@@ -514,7 +526,6 @@ function createAndGetNewSKU(itemName) {
     return { success: false, message: "SKU_MASTER 缺少必要欄位" };
   }
 
-  // 1. 同名重複檢核 (不分大小寫、去除所有空格比對)
   const normalizedTarget = cleanName.replace(/\s+/g, "").toLowerCase();
   for (let i = 1; i < data.length; i++) {
     const existingName = data[i][itemNameIdx] ? data[i][itemNameIdx].toString().replace(/\s+/g, "").toLowerCase() : "";
@@ -529,11 +540,9 @@ function createAndGetNewSKU(itemName) {
     }
   }
 
-  // 2. 自動生成全新流水號 SKU ID
   const newSkuId = 'SKU-' + String(data.length).padStart(3, '0');
   const defaultCate = "一般物資";
 
-  // 3. 建立新資料行並追加寫入
   const newRow = new Array(headers.length).fill("");
   newRow[skuIdIdx] = newSkuId;
   newRow[itemNameIdx] = cleanName;
@@ -1026,9 +1035,6 @@ function replyFlexMenuCard(replyToken, title, subtitle, items, backBtnLabel = nu
   });
 }
 
-/**
- * 🌟 核心升級：查無品項時，提供「自訂輸入完整品名」與「直接簡稱建檔」雙重選項
- */
 function replyFlexCreateSkuCard(replyToken, inputKeyword) {
   const flexContents = {
     "type": "bubble",
@@ -1059,7 +1065,6 @@ function replyFlexCreateSkuCard(replyToken, inputKeyword) {
         },
         { "type": "text", "text": "請選擇建檔方式：", "weight": "bold", "size": "md", "color": "#111827", "margin": "md" },
         
-        // 選項 1：輸入完整品名 (推薦)
         {
           "type": "button",
           "style": "primary",
@@ -1072,7 +1077,6 @@ function replyFlexCreateSkuCard(replyToken, inputKeyword) {
             "text": CMD_INPUT_DETAILED_SKU
           }
         },
-        // 選項 2：直接以關鍵字建檔
         {
           "type": "button",
           "style": "primary",
@@ -1085,7 +1089,6 @@ function replyFlexCreateSkuCard(replyToken, inputKeyword) {
             "text": CMD_CREATE_SKU_CONFIRM
           }
         },
-        // 選項 3：重新搜尋
         {
           "type": "button",
           "style": "secondary",
@@ -1111,7 +1114,12 @@ function replyFlexCreateSkuCard(replyToken, inputKeyword) {
   });
 }
 
-function replyFlexPostStocktakeCard(replyToken, userName, fullChineseLocation, cellCode, itemName, qty) {
+/**
+ * 🌟 核心升級：盤點完成卡片新增「🚪 盤點 [同櫃] 其他層格」按鈕
+ */
+function replyFlexPostStocktakeCard(replyToken, userName, fullChineseLocation, cellCode, itemName, qty, boxName) {
+  const currentBoxLabel = boxName || "同櫃子";
+  
   const flexContents = {
     "type": "bubble",
     "header": {
@@ -1143,6 +1151,7 @@ function replyFlexPostStocktakeCard(replyToken, userName, fullChineseLocation, c
         { "type": "separator", "margin": "lg" },
         { "type": "text", "text": "下一步您想要：", "weight": "bold", "size": "md", "color": "#111827", "margin": "lg" },
         
+        // 按鈕 1：同格位盤點下一件物品
         {
           "type": "button",
           "style": "primary",
@@ -1155,6 +1164,20 @@ function replyFlexPostStocktakeCard(replyToken, userName, fullChineseLocation, c
             "text": CMD_NEXT_SKU_SAME_CELL
           }
         },
+        // 🌟 按鈕 2（核心升級）：同櫃換其他層格
+        {
+          "type": "button",
+          "style": "primary",
+          "color": "#2563EB", // 醒目藍色大按鈕
+          "height": "md",
+          "margin": "sm",
+          "action": {
+            "type": "message",
+            "label": `🚪 盤點 [${currentBoxLabel.length > 8 ? currentBoxLabel.substring(0, 7) + "..." : currentBoxLabel}] 其他層格`,
+            "text": CMD_CHANGE_SHELF_SAME_BOX
+          }
+        },
+        // 按鈕 3：同空間換其他櫃位
         {
           "type": "button",
           "style": "primary",
@@ -1163,10 +1186,11 @@ function replyFlexPostStocktakeCard(replyToken, userName, fullChineseLocation, c
           "margin": "sm",
           "action": {
             "type": "message",
-            "label": "🗄️ 盤點此空間其他櫃位/層格",
+            "label": "🗄️ 盤點此空間其他櫃位",
             "text": CMD_CHANGE_BOX_SAME_ROOM
           }
         },
+        // 按鈕 4：更換其他據點/空間
         {
           "type": "button",
           "style": "secondary",
