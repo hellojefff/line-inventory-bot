@@ -1,12 +1,15 @@
 /**
- * 覺風物資管理系統 - 全網最防呆點選版 LINE Bot (全流程無死角防呆與退出閉環版)
- * 核心升級：搜尋提示全改為大字卡片，全面配置「↩️ 返回層格」與「🚪 結束盤點」，確保志工永不卡死
+ * 覺風物資管理系統 - 全網最防呆點選版 LINE Bot (即時更正補救與溫馨圖卡版)
+ * 核心升級：支援「修改品名 / 更正數量 / 刪除紀錄」，更正完成彈出小和尚圖片與溫馨提醒
  */
 
 // ==================== 全局配置 ====================
 const SPREADSHEET_ID = '13J32Ewv0PVL8o6hEoJUCuK2Ur5pBEnHO90tdG7XxtC8'; 
 const LINE_ACCESS_TOKEN = 'fstqDcGULaFwMfSL2jm1cTFgCo8Qewut0IeKvyHAwfsaL0Qd869L00YFJiHnpU7J1+oNistrv81ZAI4CrV8QeMJl3BXmm13ZEOHDqOoviFCVW17H3ObQdKFAJS54sGGA/4IFoLQUwh41EDRN36bg+wdB04t89/1O/w1cDnyilFU='; 
 const BTN_BACK_PREFIX = '↩️ 返回';
+
+// 🌟 盤點中小和尚圖片網址 (可替換為您的公開圖片圖床連結)
+const MONK_IMG_URL = 'https://i.imgur.com/8Q9Z5rL.png'; 
 
 // 系統核心控制指令常數
 const CMD_NEXT_SKU_SAME_CELL = 'CMD_NEXT_SKU_SAME_CELL';
@@ -16,7 +19,13 @@ const CMD_CHANGE_SITE = 'CMD_CHANGE_SITE';
 const CMD_CREATE_SKU_CONFIRM = 'CMD_CREATE_SKU_CONFIRM';
 const CMD_INPUT_DETAILED_SKU = 'CMD_INPUT_DETAILED_SKU';
 const CMD_RETRY_SEARCH_SKU = 'CMD_RETRY_SEARCH_SKU';
-const CMD_EXIT_STOCKTAKE = 'CMD_EXIT_STOCKTAKE'; // 🌟 核心新增：安全結束指令
+const CMD_EXIT_STOCKTAKE = 'CMD_EXIT_STOCKTAKE';
+
+// 🌟 補救更正指令常數
+const CMD_START_CORRECTION = 'CMD_START_CORRECTION';
+const CMD_CORRECT_NAME = 'CMD_CORRECT_NAME';
+const CMD_CORRECT_QTY = 'CMD_CORRECT_QTY';
+const CMD_DELETE_LAST_LOG = 'CMD_DELETE_LAST_LOG';
 
 // ==================== Webhook 進入點 ====================
 function doPost(e) {
@@ -99,7 +108,7 @@ function handleLineMessage(event) {
     return;
   }
 
-  // 🚪 核心防禦：志工隨時可以主動選擇「結束盤點」
+  // 🚪 志工隨時可以主動選擇「結束盤點」
   if (userMessage === CMD_EXIT_STOCKTAKE || userMessage === '結束盤點') {
     cache.remove(lineUid);
     replyTextMessage(replyToken, `🙏 ${myName} 您好，已為您安全結束本次盤點作業。\n\n感謝您的發心付出！如需再次盤點，請隨時點選下方「📷 開始盤點」。`);
@@ -128,7 +137,7 @@ function handleLineMessage(event) {
     return;
   }
 
-  // 🌟 全域優先攔截「系統操作指令」
+  // 🌟 全域優先攔截「系統操作與更正指令」
   if (isSystemControlCommand(userMessage)) {
     handleSystemCommand(replyToken, lineUid, session, userMessage, myName);
     return;
@@ -243,7 +252,7 @@ function handleLineMessage(event) {
       replyFlexMenuCard(replyToken, "🚪 選擇盤點層格", `已對齊櫃體：【${selectedBoxStr}】\n請點選具體【層格】：`, shelfItems, `↩️ 返回 [${session.zoneName || "櫃位分區"}]`);
       break;
       
-    // 📍 狀態 4：點選微細層格 ➔ 🌟 結構化卡片附帶「返回」與「結束」
+    // 📍 狀態 4：點選微細層格 ➔ 結構化兩行大字定位卡片
     case 'STATE_CHOOSE_CELL':
       let cellCode = userMessage.toUpperCase().trim();
       
@@ -265,7 +274,6 @@ function handleLineMessage(event) {
       session.shelfName = matchedShelf.name;
       cache.put(lineUid, JSON.stringify(session), 1200);
       
-      // 🌟 發送包含完整出口的搜尋提示大字卡片
       replyFlexSearchPromptCard(replyToken, session.spaceName, session.boxName, matchedShelf.name, cellCode, false);
       break;
       
@@ -346,6 +354,7 @@ function handleLineMessage(event) {
       
       if (success) {
         session.state = 'STATE_POST_STOCKTAKE';
+        session.lastSkuId = session.skuId;
         session.lastItemName = session.itemName;
         session.lastQty = qty;
         cache.put(lineUid, JSON.stringify(session), 1800);
@@ -357,6 +366,38 @@ function handleLineMessage(event) {
       }
       break;
 
+    // 🌟 狀態 8-A：更正品項名稱
+    case 'STATE_CORRECT_ITEM_NAME':
+      const newCorrectName = userMessage;
+      correctLastItemName(session.lastSkuId, newCorrectName, session.cellCode);
+      
+      session.lastItemName = newCorrectName;
+      session.itemName = newCorrectName;
+      session.state = 'STATE_POST_STOCKTAKE';
+      cache.put(lineUid, JSON.stringify(session), 1800);
+
+      const locTextName = `${session.siteName || ""} ${session.floorName || ""} ${session.spaceName || ""} - ${session.boxName || ""} (${session.shelfName || ""})`;
+      replyCorrectionSuccessWithMonk(replyToken, myName, locTextName, session.cellCode, newCorrectName, session.lastQty, session.boxName, `品項名稱已更新為【${newCorrectName}】！`);
+      break;
+
+    // 🌟 狀態 8-B：更正實清數量
+    case 'STATE_CORRECT_QTY':
+      const newCorrectQty = parseInt(userMessage, 10);
+      if (isNaN(newCorrectQty) || newCorrectQty < 0) {
+        replyTextMessage(replyToken, "❌ 請輸入大於或等於 0 的有效數量數字：");
+        return;
+      }
+
+      correctLastQty(session.cellCode, session.lastSkuId, newCorrectQty);
+      
+      session.lastQty = newCorrectQty;
+      session.state = 'STATE_POST_STOCKTAKE';
+      cache.put(lineUid, JSON.stringify(session), 1800);
+
+      const locTextQty = `${session.siteName || ""} ${session.floorName || ""} ${session.spaceName || ""} - ${session.boxName || ""} (${session.shelfName || ""})`;
+      replyCorrectionSuccessWithMonk(replyToken, myName, locTextQty, session.cellCode, session.lastItemName, newCorrectQty, session.boxName, `實清數量已更正為【${newCorrectQty} 本/套】！`);
+      break;
+
     // 🌟 狀態 7：盤點後連續作業導航控制器
     case 'STATE_POST_STOCKTAKE':
       handleSystemCommand(replyToken, lineUid, session, userMessage, myName);
@@ -364,7 +405,7 @@ function handleLineMessage(event) {
   }
 }
 
-// ==================== 全域系統指令判斷與分流控制器 ====================
+// ==================== 全域系統指令與更正控制器 ====================
 
 function isSystemControlCommand(msg) {
   const commands = [
@@ -375,7 +416,11 @@ function isSystemControlCommand(msg) {
     CMD_CREATE_SKU_CONFIRM,
     CMD_INPUT_DETAILED_SKU,
     CMD_RETRY_SEARCH_SKU,
-    CMD_EXIT_STOCKTAKE
+    CMD_EXIT_STOCKTAKE,
+    CMD_START_CORRECTION,
+    CMD_CORRECT_NAME,
+    CMD_CORRECT_QTY,
+    CMD_DELETE_LAST_LOG
   ];
   return commands.includes(msg);
 }
@@ -445,11 +490,43 @@ function handleSystemCommand(replyToken, lineUid, session, userMessage, userName
     return;
   }
 
-  // 7. 🌟 重新搜尋關鍵字指令 (發送帶有退出與返回出口的大字卡片)
+  // 7. 重新搜尋關鍵字指令
   if (userMessage === CMD_RETRY_SEARCH_SKU) {
     session.state = 'STATE_INPUT_SKU';
     cache.put(lineUid, JSON.stringify(session), 1200);
     replyFlexSearchPromptCard(replyToken, session.spaceName, session.boxName, session.shelfName, session.cellCode, true);
+    return;
+  }
+
+  // 🌟 8. 啟動即時補救與更正流程
+  if (userMessage === CMD_START_CORRECTION) {
+    replyFlexCorrectionMenu(replyToken, session.lastItemName, session.lastQty);
+    return;
+  }
+
+  // 🌟 8-A. 選擇修改品名
+  if (userMessage === CMD_CORRECT_NAME) {
+    session.state = 'STATE_CORRECT_ITEM_NAME';
+    cache.put(lineUid, JSON.stringify(session), 1200);
+    replyTextMessage(replyToken, `📝 請在對話框中直接輸入【正確的物品名稱】：\n(原名稱：${session.lastItemName})`);
+    return;
+  }
+
+  // 🌟 8-B. 選擇更正數量
+  if (userMessage === CMD_CORRECT_QTY) {
+    session.state = 'STATE_CORRECT_QTY';
+    cache.put(lineUid, JSON.stringify(session), 1200);
+    replyTextMessage(replyToken, `🔢 請在對話框中直接輸入【正確的實清數量數字】：\n(原數量：${session.lastQty})`);
+    return;
+  }
+
+  // 🌟 8-C. 刪除剛才這筆紀錄
+  if (userMessage === CMD_DELETE_LAST_LOG) {
+    deleteLastRecord(session.cellCode, session.lastSkuId);
+    session.state = 'STATE_INPUT_SKU';
+    cache.put(lineUid, JSON.stringify(session), 1200);
+    
+    replyTextMessage(replyToken, `🗑️ 已為您刪除剛才【${session.lastItemName}】的盤點紀錄並還原庫存！\n\n您現在可以重新搜尋該格位的物資：`);
     return;
   }
 }
@@ -549,6 +626,115 @@ function handleGoBack(replyToken, lineUid, session, userName) {
       const defaultItems = defaultSites.map(s => ({ title: s, desc: "點擊進入此據點", value: s }));
       replyFlexMenuCard(replyToken, "🙏 選擇盤點據點", "請選擇您所在的【據點】：", defaultItems, null);
       break;
+  }
+}
+
+// ==================== 資料庫資料修正與刪除補救核心 ====================
+
+/**
+ * 修改品項名稱（同步更新 SKU_MASTER, STOCKTAKE_LOG 與 CURRENT_STOCK）
+ */
+function correctLastItemName(skuId, newItemName, cellCode) {
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  
+  // 1. 更新 SKU_MASTER
+  const skuSheet = ss.getSheetByName("SKU_MASTER");
+  if (skuSheet) {
+    const data = skuSheet.getDataRange().getValues();
+    const skuIdx = data[0].indexOf("品項編號");
+    const nameIdx = data[0].indexOf("物品名稱");
+    for (let i = 1; i < data.length; i++) {
+      if (data[i][skuIdx] && data[i][skuIdx].toString() === skuId) {
+        skuSheet.getRange(i + 1, nameIdx + 1).setValue(newItemName);
+        break;
+      }
+    }
+  }
+
+  // 2. 更新 STOCKTAKE_LOG 最後一筆
+  const logSheet = ss.getSheetByName("STOCKTAKE_LOG");
+  if (logSheet) {
+    const lastRow = logSheet.getLastRow();
+    if (lastRow > 1) {
+      const headers = logSheet.getRange(1, 1, 1, logSheet.getLastColumn()).getValues()[0];
+      const nameIdx = headers.indexOf("物品名稱");
+      if (nameIdx !== -1) logSheet.getRange(lastRow, nameIdx + 1).setValue(newItemName);
+    }
+  }
+
+  // 3. 更新 CURRENT_STOCK
+  const stockSheet = ss.getSheetByName("CURRENT_STOCK");
+  if (stockSheet) {
+    const data = stockSheet.getDataRange().getValues();
+    const cellIdx = data[0].indexOf("儲位格位代碼");
+    const skuIdx = data[0].indexOf("品項編號");
+    const nameIdx = data[0].indexOf("物品名稱");
+    for (let i = 1; i < data.length; i++) {
+      if (data[i][cellIdx] === cellCode && data[i][skuIdx] === skuId) {
+        stockSheet.getRange(i + 1, nameIdx + 1).setValue(newItemName);
+        break;
+      }
+    }
+  }
+}
+
+/**
+ * 更正實清數量（同步更新 STOCKTAKE_LOG 與 CURRENT_STOCK）
+ */
+function correctLastQty(cellCode, skuId, newQty) {
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  
+  // 1. 更新 STOCKTAKE_LOG 最後一筆
+  const logSheet = ss.getSheetByName("STOCKTAKE_LOG");
+  if (logSheet) {
+    const lastRow = logSheet.getLastRow();
+    if (lastRow > 1) {
+      const headers = logSheet.getRange(1, 1, 1, logSheet.getLastColumn()).getValues()[0];
+      const qtyIdx = headers.indexOf("實清數量");
+      if (qtyIdx !== -1) logSheet.getRange(lastRow, qtyIdx + 1).setValue(newQty);
+    }
+  }
+
+  // 2. 更新 CURRENT_STOCK
+  const stockSheet = ss.getSheetByName("CURRENT_STOCK");
+  if (stockSheet) {
+    const data = stockSheet.getDataRange().getValues();
+    const cellIdx = data[0].indexOf("儲位格位代碼");
+    const skuIdx = data[0].indexOf("品項編號");
+    const qtyIdx = data[0].indexOf("現有庫存量");
+    for (let i = 1; i < data.length; i++) {
+      if (data[i][cellIdx] === cellCode && data[i][skuIdx] === skuId) {
+        stockSheet.getRange(i + 1, qtyIdx + 1).setValue(newQty);
+        break;
+      }
+    }
+  }
+}
+
+/**
+ * 刪除最後一筆盤點紀錄
+ */
+function deleteLastRecord(cellCode, skuId) {
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  
+  // 1. 刪除 STOCKTAKE_LOG 最後一列
+  const logSheet = ss.getSheetByName("STOCKTAKE_LOG");
+  if (logSheet && logSheet.getLastRow() > 1) {
+    logSheet.deleteRow(logSheet.getLastRow());
+  }
+
+  // 2. 清除 CURRENT_STOCK 該格位該品項
+  const stockSheet = ss.getSheetByName("CURRENT_STOCK");
+  if (stockSheet) {
+    const data = stockSheet.getDataRange().getValues();
+    const cellIdx = data[0].indexOf("儲位格位代碼");
+    const skuIdx = data[0].indexOf("品項編號");
+    for (let i = 1; i < data.length; i++) {
+      if (data[i][cellIdx] === cellCode && data[i][skuIdx] === skuId) {
+        stockSheet.deleteRow(i + 1);
+        break;
+      }
+    }
   }
 }
 
@@ -1085,9 +1271,6 @@ function replyFlexMenuCard(replyToken, title, subtitle, items, backBtnLabel = nu
   });
 }
 
-/**
- * 🌟 核心升級：統一搜尋引導卡片 (支援定位初次提示與重新搜尋，配置「返回」與「結束」雙重出口)
- */
 function replyFlexSearchPromptCard(replyToken, spaceName, boxName, shelfName, cellCode, isRetry = false) {
   const currentBoxLabel = boxName || "同櫃子";
   const cleanBoxName = currentBoxLabel.includes('-') ? currentBoxLabel.split('-')[1].split('(')[0] : (currentBoxLabel.split('(')[0] || "同櫃");
@@ -1138,7 +1321,6 @@ function replyFlexSearchPromptCard(replyToken, spaceName, boxName, shelfName, ce
       "type": "box",
       "layout": "vertical",
       "contents": [
-        // 出口 1：返回該櫃重選層格
         {
           "type": "button",
           "style": "secondary",
@@ -1149,7 +1331,6 @@ function replyFlexSearchPromptCard(replyToken, spaceName, boxName, shelfName, ce
             "text": `↩️ 返回 [${cleanBoxName} 清單]`
           }
         },
-        // 🌟 出口 2：安全結束本次盤點
         {
           "type": "button",
           "style": "secondary",
@@ -1240,7 +1421,6 @@ function replyFlexCreateSkuCard(replyToken, inputKeyword) {
             "text": CMD_RETRY_SEARCH_SKU
           }
         },
-        // 出口：結束盤點
         {
           "type": "button",
           "style": "secondary",
@@ -1266,6 +1446,9 @@ function replyFlexCreateSkuCard(replyToken, inputKeyword) {
   });
 }
 
+/**
+ * 🌟 核心升級：成功卡片新增「✏️ 剛才打錯了？立即更正」按鈕
+ */
 function replyFlexPostStocktakeCard(replyToken, userName, fullChineseLocation, cellCode, itemName, qty, boxName) {
   const currentBoxLabel = boxName ? (boxName.includes('-') ? boxName.split('-')[1].split('(')[0] : boxName.split('(')[0]) : "同櫃子";
   
@@ -1296,6 +1479,19 @@ function replyFlexPostStocktakeCard(replyToken, userName, fullChineseLocation, c
             { "type": "text", "text": `📦 物品：${itemName}`, "size": "md", "weight": "bold", "color": "#111827", "margin": "sm" },
             { "type": "text", "text": `🔢 實清數量：${qty} 本/套`, "size": "sm", "color": "#059669", "margin": "xs" }
           ]
+        },
+        // 🌟 方案 A 核心入口：打錯了立即更正
+        {
+          "type": "button",
+          "style": "primary",
+          "color": "#F59E0B", // 醒目橘黃色按鈕
+          "height": "md",
+          "margin": "md",
+          "action": {
+            "type": "message",
+            "label": "✏️ 剛才打錯了？立即更正",
+            "text": CMD_START_CORRECTION
+          }
         },
         { "type": "separator", "margin": "lg" },
         { "type": "text", "text": "下一步您想要：", "weight": "bold", "size": "md", "color": "#111827", "margin": "lg" },
@@ -1369,6 +1565,222 @@ function replyFlexPostStocktakeCard(replyToken, userName, fullChineseLocation, c
       "altText": "✅ 盤點更新成功，請選擇下一步",
       "contents": flexContents
     }]
+  });
+}
+
+/**
+ * 🌟 核心新增：補救與更正選單卡片
+ */
+function replyFlexCorrectionMenu(replyToken, currentItemName, currentQty) {
+  const flexContents = {
+    "type": "bubble",
+    "header": {
+      "type": "box",
+      "layout": "vertical",
+      "backgroundColor": "#FFFBEB",
+      "contents": [
+        { "type": "text", "text": "✏️ 盤點紀錄即時更正", "weight": "bold", "size": "xl", "color": "#B45309" },
+        { "type": "text", "text": "請選擇您要修正的項目：", "size": "sm", "color": "#92400E", "margin": "xs" }
+      ]
+    },
+    "body": {
+      "type": "box",
+      "layout": "vertical",
+      "contents": [
+        {
+          "type": "box",
+          "layout": "vertical",
+          "backgroundColor": "#F9FAFB",
+          "paddingAll": "md",
+          "cornerRadius": "md",
+          "contents": [
+            { "type": "text", "text": `當前物品：${currentItemName}`, "weight": "bold", "size": "sm", "color": "#374151" },
+            { "type": "text", "text": `當前數量：${currentQty} 本/套`, "size": "sm", "color": "#059669", "margin": "xs" }
+          ]
+        },
+        // 修正選項 1：改品名
+        {
+          "type": "button",
+          "style": "primary",
+          "color": "#16A34A",
+          "height": "md",
+          "margin": "md",
+          "action": {
+            "type": "message",
+            "label": "📝 修改物品名稱 (打錯字)",
+            "text": CMD_CORRECT_NAME
+          }
+        },
+        // 修正選項 2：改數量
+        {
+          "type": "button",
+          "style": "primary",
+          "color": "#2563EB",
+          "height": "md",
+          "margin": "sm",
+          "action": {
+            "type": "message",
+            "label": "🔢 更正實清數量 (算錯本數)",
+            "text": CMD_CORRECT_QTY
+          }
+        },
+        // 修正選項 3：刪除紀錄
+        {
+          "type": "button",
+          "style": "primary",
+          "color": "#DC2626", // 紅色警示按鈕
+          "height": "md",
+          "margin": "sm",
+          "action": {
+            "type": "message",
+            "label": "🗑️ 刪除剛才這筆紀錄",
+            "text": CMD_DELETE_LAST_LOG
+          }
+        }
+      ]
+    }
+  };
+
+  sendToLine({
+    replyToken: replyToken,
+    messages: [{
+      "type": "flex",
+      "altText": "✏️ 盤點紀錄即時更正",
+      "contents": flexContents
+    }]
+  });
+}
+
+/**
+ * 🌟 核心新增：更正成功後發送「小和尚圖片」+「溫馨提示」+「最新卡片」
+ */
+function replyCorrectionSuccessWithMonk(replyToken, userName, fullChineseLocation, cellCode, itemName, qty, boxName, customTip) {
+  const currentBoxLabel = boxName ? (boxName.includes('-') ? boxName.split('-')[1].split('(')[0] : boxName.split('(')[0]) : "同櫃子";
+  
+  const flexContents = {
+    "type": "bubble",
+    "header": {
+      "type": "box",
+      "layout": "vertical",
+      "backgroundColor": "#ECFDF5",
+      "contents": [
+        { "type": "text", "text": "✅ 紀錄已成功更正！", "weight": "bold", "size": "xl", "color": "#065F46" },
+        { "type": "text", "text": `經手人員：${userName}`, "size": "sm", "color": "#047857", "margin": "xs" }
+      ]
+    },
+    "body": {
+      "type": "box",
+      "layout": "vertical",
+      "contents": [
+        {
+          "type": "box",
+          "layout": "vertical",
+          "backgroundColor": "#F9FAFB",
+          "paddingAll": "md",
+          "cornerRadius": "md",
+          "contents": [
+            { "type": "text", "text": `📍 位置：${fullChineseLocation}`, "weight": "bold", "size": "sm", "color": "#374151", "wrap": true },
+            { "type": "text", "text": `代碼：${cellCode}`, "size": "xs", "color": "#9CA3AF", "margin": "xs" },
+            { "type": "text", "text": `📦 物品：${itemName}`, "size": "md", "weight": "bold", "color": "#111827", "margin": "sm" },
+            { "type": "text", "text": `🔢 實清數量：${qty} 本/套`, "size": "sm", "color": "#059669", "margin": "xs" }
+          ]
+        },
+        {
+          "type": "button",
+          "style": "primary",
+          "color": "#F59E0B",
+          "height": "md",
+          "margin": "md",
+          "action": {
+            "type": "message",
+            "label": "✏️ 剛才打錯了？立即更正",
+            "text": CMD_START_CORRECTION
+          }
+        },
+        { "type": "separator", "margin": "lg" },
+        { "type": "text", "text": "下一步您想要：", "weight": "bold", "size": "md", "color": "#111827", "margin": "lg" },
+        
+        {
+          "type": "button",
+          "style": "primary",
+          "color": "#16A34A",
+          "height": "md",
+          "margin": "md",
+          "action": {
+            "type": "message",
+            "label": "📦 同格位盤點下一件物品",
+            "text": CMD_NEXT_SKU_SAME_CELL
+          }
+        },
+        {
+          "type": "button",
+          "style": "primary",
+          "color": "#2563EB",
+          "height": "md",
+          "margin": "sm",
+          "action": {
+            "type": "message",
+            "label": `🚪 盤點 [${currentBoxLabel}] 其他層格`,
+            "text": CMD_CHANGE_SHELF_SAME_BOX
+          }
+        },
+        {
+          "type": "button",
+          "style": "primary",
+          "color": "#0D9488",
+          "height": "md",
+          "margin": "sm",
+          "action": {
+            "type": "message",
+            "label": "🗄️ 盤點此空間其他櫃位",
+            "text": CMD_CHANGE_BOX_SAME_ROOM
+          }
+        },
+        {
+          "type": "button",
+          "style": "secondary",
+          "height": "md",
+          "margin": "sm",
+          "action": {
+            "type": "message",
+            "label": "🏛️ 更換其他據點/空間",
+            "text": CMD_CHANGE_SITE
+          }
+        },
+        {
+          "type": "button",
+          "style": "secondary",
+          "height": "md",
+          "margin": "sm",
+          "action": {
+            "type": "message",
+            "label": "🚪 結束盤點 (回主選單)",
+            "text": CMD_EXIT_STOCKTAKE
+          }
+        }
+      ]
+    }
+  };
+
+  // 🌟 連續發送：小和尚圖片 + 溫馨文字 + 最新確認卡片
+  sendToLine({
+    replyToken: replyToken,
+    messages: [
+      {
+        "type": "image",
+        "originalContentUrl": MONK_IMG_URL,
+        "previewImageUrl": MONK_IMG_URL
+      },
+      {
+        "type": "text",
+        "text": `🙏 ${customTip}\n\n下次盤點要再多加小心確認喔～😊`
+      },
+      {
+        "type": "flex",
+        "altText": "✅ 紀錄已成功更正",
+        "contents": flexContents
+      }
+    ]
   });
 }
 
@@ -1470,7 +1882,6 @@ function replyFlexSkuVerticalList(replyToken, skus) {
             "text": CMD_RETRY_SEARCH_SKU
           }
         },
-        // 🌟 多筆清單加入「結束盤點」出口
         {
           "type": "button",
           "style": "secondary",
