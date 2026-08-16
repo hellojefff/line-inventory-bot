@@ -1,6 +1,6 @@
 /**
- * 覺風物資管理系統 - 全網最防呆點選版 LINE Bot (格位兩行結構化大字排版版)
- * 核心升級：定位卡片結構化拆分「空間櫃位」與「具體層格」兩行呈現，返回按鈕精簡不截斷
+ * 覺風物資管理系統 - 全網最防呆點選版 LINE Bot (全流程無死角防呆與退出閉環版)
+ * 核心升級：搜尋提示全改為大字卡片，全面配置「↩️ 返回層格」與「🚪 結束盤點」，確保志工永不卡死
  */
 
 // ==================== 全局配置 ====================
@@ -16,6 +16,7 @@ const CMD_CHANGE_SITE = 'CMD_CHANGE_SITE';
 const CMD_CREATE_SKU_CONFIRM = 'CMD_CREATE_SKU_CONFIRM';
 const CMD_INPUT_DETAILED_SKU = 'CMD_INPUT_DETAILED_SKU';
 const CMD_RETRY_SEARCH_SKU = 'CMD_RETRY_SEARCH_SKU';
+const CMD_EXIT_STOCKTAKE = 'CMD_EXIT_STOCKTAKE'; // 🌟 核心新增：安全結束指令
 
 // ==================== Webhook 進入點 ====================
 function doPost(e) {
@@ -95,6 +96,13 @@ function handleLineMessage(event) {
   // 👤 點擊圖文選單的「身份綁定」
   if (userMessage === '綁定身份') {
     replyTextMessage(replyToken, `💡 溫馨提示：\n${myName} 您好，系統確認您已完成實名活化！\n\n編號：[${myUserId}]\n單位：${myDept}\n職稱：${myTitle}\n\n權限已固化，無需重複綁定。請直接點選下方「📷 開始盤點」開始作業！`);
+    return;
+  }
+
+  // 🚪 核心防禦：志工隨時可以主動選擇「結束盤點」
+  if (userMessage === CMD_EXIT_STOCKTAKE || userMessage === '結束盤點') {
+    cache.remove(lineUid);
+    replyTextMessage(replyToken, `🙏 ${myName} 您好，已為您安全結束本次盤點作業。\n\n感謝您的發心付出！如需再次盤點，請隨時點選下方「📷 開始盤點」。`);
     return;
   }
 
@@ -235,7 +243,7 @@ function handleLineMessage(event) {
       replyFlexMenuCard(replyToken, "🚪 選擇盤點層格", `已對齊櫃體：【${selectedBoxStr}】\n請點選具體【層格】：`, shelfItems, `↩️ 返回 [${session.zoneName || "櫃位分區"}]`);
       break;
       
-    // 📍 狀態 4：點選微細層格 ➔ 🌟 結構化兩行大字定位卡片
+    // 📍 狀態 4：點選微細層格 ➔ 🌟 結構化卡片附帶「返回」與「結束」
     case 'STATE_CHOOSE_CELL':
       let cellCode = userMessage.toUpperCase().trim();
       
@@ -257,8 +265,8 @@ function handleLineMessage(event) {
       session.shelfName = matchedShelf.name;
       cache.put(lineUid, JSON.stringify(session), 1200);
       
-      // 🌟 兩行結構化大字卡片
-      replyFlexLocationReadyCard(replyToken, session.spaceName, session.boxName, matchedShelf.name, cellCode);
+      // 🌟 發送包含完整出口的搜尋提示大字卡片
+      replyFlexSearchPromptCard(replyToken, session.spaceName, session.boxName, matchedShelf.name, cellCode, false);
       break;
       
     // 📦 狀態 5：搜尋物資 (SKU)
@@ -308,7 +316,7 @@ function handleLineMessage(event) {
       if (userMessage === CMD_RETRY_SEARCH_SKU) {
         session.state = 'STATE_INPUT_SKU';
         cache.put(lineUid, JSON.stringify(session), 1200);
-        replyTextMessage(replyToken, `🔍 請重新輸入【物品名稱】或關鍵字進行搜尋：`);
+        replyFlexSearchPromptCard(replyToken, session.spaceName, session.boxName, session.shelfName, session.cellCode, true);
         return;
       }
 
@@ -366,7 +374,8 @@ function isSystemControlCommand(msg) {
     CMD_CHANGE_SITE,
     CMD_CREATE_SKU_CONFIRM,
     CMD_INPUT_DETAILED_SKU,
-    CMD_RETRY_SEARCH_SKU
+    CMD_RETRY_SEARCH_SKU,
+    CMD_EXIT_STOCKTAKE
   ];
   return commands.includes(msg);
 }
@@ -378,7 +387,7 @@ function handleSystemCommand(replyToken, lineUid, session, userMessage, userName
   if (userMessage === CMD_NEXT_SKU_SAME_CELL) {
     session.state = 'STATE_INPUT_SKU';
     cache.put(lineUid, JSON.stringify(session), 1800);
-    replyFlexLocationReadyCard(replyToken, session.spaceName, session.boxName, session.shelfName, session.cellCode);
+    replyFlexSearchPromptCard(replyToken, session.spaceName, session.boxName, session.shelfName, session.cellCode, false);
     return;
   }
 
@@ -436,11 +445,11 @@ function handleSystemCommand(replyToken, lineUid, session, userMessage, userName
     return;
   }
 
-  // 7. 重新搜尋關鍵字指令
+  // 7. 🌟 重新搜尋關鍵字指令 (發送帶有退出與返回出口的大字卡片)
   if (userMessage === CMD_RETRY_SEARCH_SKU) {
     session.state = 'STATE_INPUT_SKU';
     cache.put(lineUid, JSON.stringify(session), 1200);
-    replyTextMessage(replyToken, `🔍 請重新輸入【物品名稱】或關鍵字進行搜尋：`);
+    replyFlexSearchPromptCard(replyToken, session.spaceName, session.boxName, session.shelfName, session.cellCode, true);
     return;
   }
 }
@@ -483,7 +492,6 @@ function handleGoBack(replyToken, lineUid, session, userName) {
   const cache = CacheService.getUserCache();
 
   switch (session.state) {
-    // 🌟 在輸入物品狀態點擊返回 ➔ 回到該櫃的層格選單
     case 'STATE_INPUT_SKU':
     case 'STATE_CONFIRM_CREATE_SKU':
     case 'STATE_INPUT_FULL_SKU_NAME':
@@ -1078,11 +1086,13 @@ function replyFlexMenuCard(replyToken, title, subtitle, items, backBtnLabel = nu
 }
 
 /**
- * 🌟 核心升級：結構化「空間櫃位」與「具體層格」兩行排版卡片 (返回鍵精簡不截斷)
+ * 🌟 核心升級：統一搜尋引導卡片 (支援定位初次提示與重新搜尋，配置「返回」與「結束」雙重出口)
  */
-function replyFlexLocationReadyCard(replyToken, spaceName, boxName, shelfName, cellCode) {
-  // 從 "B3-第3櫃(左三開放架)" 中取出精簡名稱（例如："第3櫃"），確保按鈕不被截斷
-  const cleanBoxName = boxName.includes('-') ? boxName.split('-')[1].split('(')[0] : (boxName.split('(')[0] || "同櫃");
+function replyFlexSearchPromptCard(replyToken, spaceName, boxName, shelfName, cellCode, isRetry = false) {
+  const currentBoxLabel = boxName || "同櫃子";
+  const cleanBoxName = currentBoxLabel.includes('-') ? currentBoxLabel.split('-')[1].split('(')[0] : (currentBoxLabel.split('(')[0] || "同櫃");
+  const headerTitle = isRetry ? "🔍 重新搜尋物資" : "📍 已定位盤點格位";
+  const promptText = isRetry ? "🔍 請在下方對話框輸入新的【物品名稱】或關鍵字：" : "🔍 請在下方對話框輸入【物品名稱】進行搜尋或建檔：";
   
   const flexContents = {
     "type": "bubble",
@@ -1091,8 +1101,8 @@ function replyFlexLocationReadyCard(replyToken, spaceName, boxName, shelfName, c
       "layout": "vertical",
       "backgroundColor": "#F0FDF4",
       "contents": [
-        { "type": "text", "text": "📍 已定位盤點格位", "weight": "bold", "size": "xl", "color": "#15803D" },
-        { "type": "text", "text": "請在下方對話框輸入物品名稱進行搜尋或建檔", "size": "xs", "color": "#4B5563", "margin": "xs" }
+        { "type": "text", "text": headerTitle, "weight": "bold", "size": "xl", "color": "#15803D" },
+        { "type": "text", "text": "請在對話框直接打字，或使用下方按鈕導航", "size": "xs", "color": "#4B5563", "margin": "xs" }
       ]
     },
     "body": {
@@ -1108,37 +1118,14 @@ function replyFlexLocationReadyCard(replyToken, spaceName, boxName, shelfName, c
           "cornerRadius": "md",
           "paddingAll": "md",
           "contents": [
-            // 🌟 第一行：所在空間與櫃體 (深灰色)
-            { 
-              "type": "text", 
-              "text": `🏢 ${spaceName} ｜ ${boxName}`, 
-              "size": "sm", 
-              "color": "#4B5563", 
-              "wrap": true 
-            },
-            // 🌟 第二行：具體層格位置 (綠色粗體大字)
-            { 
-              "type": "text", 
-              "text": `📍 ${shelfName}`, 
-              "weight": "bold", 
-              "size": "lg", 
-              "color": "#15803D", 
-              "margin": "xs", 
-              "wrap": true 
-            },
-            // 第三行：底層格位代碼 (灰色小字)
-            { 
-              "type": "text", 
-              "text": `格位代碼：${cellCode}`, 
-              "size": "xs", 
-              "color": "#9CA3AF", 
-              "margin": "sm" 
-            }
+            { "type": "text", "text": `🏢 ${spaceName} ｜ ${boxName}`, "size": "sm", "color": "#4B5563", "wrap": true },
+            { "type": "text", "text": `📍 ${shelfName}`, "weight": "bold", "size": "lg", "color": "#15803D", "margin": "xs", "wrap": true },
+            { "type": "text", "text": `格位代碼：${cellCode}`, "size": "xs", "color": "#9CA3AF", "margin": "sm" }
           ]
         },
         {
           "type": "text",
-          "text": "🔍 請在下方對話框輸入【物品名稱】或關鍵字：",
+          "text": promptText,
           "size": "sm",
           "weight": "bold",
           "color": "#374151",
@@ -1151,7 +1138,7 @@ function replyFlexLocationReadyCard(replyToken, spaceName, boxName, shelfName, c
       "type": "box",
       "layout": "vertical",
       "contents": [
-        // 🌟 精簡返回按鈕：短於 12 字，100% 完整顯示不出現「...」
+        // 出口 1：返回該櫃重選層格
         {
           "type": "button",
           "style": "secondary",
@@ -1160,6 +1147,18 @@ function replyFlexLocationReadyCard(replyToken, spaceName, boxName, shelfName, c
             "type": "message",
             "label": `↩️ 返回 [${cleanBoxName} 清單]`,
             "text": `↩️ 返回 [${cleanBoxName} 清單]`
+          }
+        },
+        // 🌟 出口 2：安全結束本次盤點
+        {
+          "type": "button",
+          "style": "secondary",
+          "height": "md",
+          "margin": "sm",
+          "action": {
+            "type": "message",
+            "label": "🚪 結束盤點 (回主選單)",
+            "text": CMD_EXIT_STOCKTAKE
           }
         }
       ]
@@ -1170,7 +1169,7 @@ function replyFlexLocationReadyCard(replyToken, spaceName, boxName, shelfName, c
     replyToken: replyToken,
     messages: [{
       "type": "flex",
-      "altText": "📍 已定位格位，請輸入物品名稱",
+      "altText": headerTitle,
       "contents": flexContents
     }]
   });
@@ -1239,6 +1238,18 @@ function replyFlexCreateSkuCard(replyToken, inputKeyword) {
             "type": "message",
             "label": "🔍 重新搜尋關鍵字",
             "text": CMD_RETRY_SEARCH_SKU
+          }
+        },
+        // 出口：結束盤點
+        {
+          "type": "button",
+          "style": "secondary",
+          "height": "md",
+          "margin": "sm",
+          "action": {
+            "type": "message",
+            "label": "🚪 結束盤點 (回主選單)",
+            "text": CMD_EXIT_STOCKTAKE
           }
         }
       ]
@@ -1334,6 +1345,17 @@ function replyFlexPostStocktakeCard(replyToken, userName, fullChineseLocation, c
             "type": "message",
             "label": "🏛️ 更換其他據點/空間",
             "text": CMD_CHANGE_SITE
+          }
+        },
+        {
+          "type": "button",
+          "style": "secondary",
+          "height": "md",
+          "margin": "sm",
+          "action": {
+            "type": "message",
+            "label": "🚪 結束盤點 (回主選單)",
+            "text": CMD_EXIT_STOCKTAKE
           }
         }
       ]
@@ -1447,6 +1469,18 @@ function replyFlexSkuVerticalList(replyToken, skus) {
             "label": "🔍 重新搜尋關鍵字",
             "text": CMD_RETRY_SEARCH_SKU
           }
+        },
+        // 🌟 多筆清單加入「結束盤點」出口
+        {
+          "type": "button",
+          "style": "secondary",
+          "height": "md",
+          "margin": "xs",
+          "action": {
+            "type": "message",
+            "label": "🚪 結束盤點 (回主選單)",
+            "text": CMD_EXIT_STOCKTAKE
+          }
         }
       ]
     }
@@ -1510,6 +1544,17 @@ function replyFlexSkuCard(replyToken, itemName, skuId, cateName, userKeyword) {
             "type": "message",
             "label": "🔍 重新搜尋關鍵字",
             "text": CMD_RETRY_SEARCH_SKU
+          }
+        },
+        {
+          "type": "button",
+          "style": "secondary",
+          "height": "md",
+          "margin": "sm",
+          "action": {
+            "type": "message",
+            "label": "🚪 結束盤點 (回主選單)",
+            "text": CMD_EXIT_STOCKTAKE
           }
         }
       ]
