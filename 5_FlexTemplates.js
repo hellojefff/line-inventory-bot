@@ -1,5 +1,6 @@
 /**
  * 模組 5：LINE Flex Message 視覺圖卡樣板 (5_FlexTemplates.js)
+ * 更新重點：全選單卡片底部全面補齊「🚪 結束盤點 (回主選單)」安全出口按鈕
  */
 
 function replyTextMessage(replyToken, text) {
@@ -121,6 +122,9 @@ function replyExitStocktakeWithImage(replyToken, userName) {
   });
 }
 
+/**
+ * 🌟 核心更新：在所有選單卡片底部固定加入「結束盤點」按鈕
+ */
 function replyFlexMenuCard(replyToken, title, subtitle, items, backBtnLabel = null) {
   const buttonRows = items.map(item => ({
     "type": "box",
@@ -156,6 +160,35 @@ function replyFlexMenuCard(replyToken, title, subtitle, items, backBtnLabel = nu
     ]
   }));
 
+  const footerButtons = [];
+
+  // 若有上一層的返回按鈕，排在最上方
+  if (backBtnLabel) {
+    footerButtons.push({
+      "type": "button",
+      "style": "secondary",
+      "height": "md",
+      "action": {
+        "type": "message",
+        "label": backBtnLabel,
+        "text": backBtnLabel
+      }
+    });
+  }
+
+  // 🌟 固定附帶：結束盤點按鈕 (第一層據點選單也會顯示)
+  footerButtons.push({
+    "type": "button",
+    "style": "secondary",
+    "height": "md",
+    "margin": backBtnLabel ? "sm" : "none",
+    "action": {
+      "type": "message",
+      "label": "🚪 結束盤點 (回主選單)",
+      "text": CMD_EXIT_STOCKTAKE
+    }
+  });
+
   const flexContents = {
     "type": "bubble",
     "header": {
@@ -171,27 +204,13 @@ function replyFlexMenuCard(replyToken, title, subtitle, items, backBtnLabel = nu
       "type": "box",
       "layout": "vertical",
       "contents": buttonRows
-    }
-  };
-
-  if (backBtnLabel) {
-    flexContents.footer = {
+    },
+    "footer": {
       "type": "box",
       "layout": "vertical",
-      "contents": [
-        {
-          "type": "button",
-          "style": "secondary",
-          "height": "md",
-          "action": {
-            "type": "message",
-            "label": backBtnLabel,
-            "text": backBtnLabel
-          }
-        }
-      ]
-    };
-  }
+      "contents": footerButtons
+    }
+  };
 
   sendToLine({
     replyToken: replyToken,
