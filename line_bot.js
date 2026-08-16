@@ -1,6 +1,6 @@
 /**
- * 覺風物資管理系統 - 全網最防呆點選版 LINE Bot (定位格位附帶「返回重選層格」按鈕版)
- * 核心升級：定位層格後改為發送大字卡片，附帶「↩️ 返回 [同櫃層格清單]」大按鈕，隨時可防呆重選
+ * 覺風物資管理系統 - 全網最防呆點選版 LINE Bot (格位兩行結構化大字排版版)
+ * 核心升級：定位卡片結構化拆分「空間櫃位」與「具體層格」兩行呈現，返回按鈕精簡不截斷
  */
 
 // ==================== 全局配置 ====================
@@ -235,7 +235,7 @@ function handleLineMessage(event) {
       replyFlexMenuCard(replyToken, "🚪 選擇盤點層格", `已對齊櫃體：【${selectedBoxStr}】\n請點選具體【層格】：`, shelfItems, `↩️ 返回 [${session.zoneName || "櫃位分區"}]`);
       break;
       
-    // 📍 狀態 4：點選微細層格 ➔ 🌟 升級：噴出定位大字卡片，附帶「↩️ 返回 [同櫃層格]」按鈕
+    // 📍 狀態 4：點選微細層格 ➔ 🌟 結構化兩行大字定位卡片
     case 'STATE_CHOOSE_CELL':
       let cellCode = userMessage.toUpperCase().trim();
       
@@ -257,7 +257,7 @@ function handleLineMessage(event) {
       session.shelfName = matchedShelf.name;
       cache.put(lineUid, JSON.stringify(session), 1200);
       
-      // 🌟 發送定位確認大字卡片，讓志工隨時可以點擊返回重選層格
+      // 🌟 兩行結構化大字卡片
       replyFlexLocationReadyCard(replyToken, session.spaceName, session.boxName, matchedShelf.name, cellCode);
       break;
       
@@ -301,7 +301,7 @@ function handleLineMessage(event) {
       if (userMessage === CMD_INPUT_DETAILED_SKU) {
         session.state = 'STATE_INPUT_FULL_SKU_NAME';
         cache.put(lineUid, JSON.stringify(session), 1200);
-        replyTextMessage(replyToken, `✏️ 請在對話框中直接輸入【完整品項名稱與規格】：\n(例如：舒潔三層抽取式衛生紙 100抽)`);
+        replyTextMessage(replyToken, `✏️ 請在對話框中直接輸入【完整品項名稱與規格】：\n(例如：金剛經講記-智慧之光)`);
         return;
       }
 
@@ -483,7 +483,7 @@ function handleGoBack(replyToken, lineUid, session, userName) {
   const cache = CacheService.getUserCache();
 
   switch (session.state) {
-    // 🌟 核心新增：在輸入物品搜尋狀態按返回 ➔ 回到同櫃的層格選單
+    // 🌟 在輸入物品狀態點擊返回 ➔ 回到該櫃的層格選單
     case 'STATE_INPUT_SKU':
     case 'STATE_CONFIRM_CREATE_SKU':
     case 'STATE_INPUT_FULL_SKU_NAME':
@@ -1078,10 +1078,11 @@ function replyFlexMenuCard(replyToken, title, subtitle, items, backBtnLabel = nu
 }
 
 /**
- * 🌟 核心新增：定位格位大字卡片 (附帶「↩️ 返回 [同櫃層格]」大按鈕)
+ * 🌟 核心升級：結構化「空間櫃位」與「具體層格」兩行排版卡片 (返回鍵精簡不截斷)
  */
 function replyFlexLocationReadyCard(replyToken, spaceName, boxName, shelfName, cellCode) {
-  const currentBoxLabel = boxName || "同櫃子";
+  // 從 "B3-第3櫃(左三開放架)" 中取出精簡名稱（例如："第3櫃"），確保按鈕不被截斷
+  const cleanBoxName = boxName.includes('-') ? boxName.split('-')[1].split('(')[0] : (boxName.split('(')[0] || "同櫃");
   
   const flexContents = {
     "type": "bubble",
@@ -1107,8 +1108,32 @@ function replyFlexLocationReadyCard(replyToken, spaceName, boxName, shelfName, c
           "cornerRadius": "md",
           "paddingAll": "md",
           "contents": [
-            { "type": "text", "text": `【${spaceName} - ${boxName} - ${shelfName}】`, "weight": "bold", "size": "md", "color": "#111827", "wrap": true },
-            { "type": "text", "text": `格位代碼：${cellCode}`, "size": "xs", "color": "#9CA3AF", "margin": "xs" }
+            // 🌟 第一行：所在空間與櫃體 (深灰色)
+            { 
+              "type": "text", 
+              "text": `🏢 ${spaceName} ｜ ${boxName}`, 
+              "size": "sm", 
+              "color": "#4B5563", 
+              "wrap": true 
+            },
+            // 🌟 第二行：具體層格位置 (綠色粗體大字)
+            { 
+              "type": "text", 
+              "text": `📍 ${shelfName}`, 
+              "weight": "bold", 
+              "size": "lg", 
+              "color": "#15803D", 
+              "margin": "xs", 
+              "wrap": true 
+            },
+            // 第三行：底層格位代碼 (灰色小字)
+            { 
+              "type": "text", 
+              "text": `格位代碼：${cellCode}`, 
+              "size": "xs", 
+              "color": "#9CA3AF", 
+              "margin": "sm" 
+            }
           ]
         },
         {
@@ -1126,15 +1151,15 @@ function replyFlexLocationReadyCard(replyToken, spaceName, boxName, shelfName, c
       "type": "box",
       "layout": "vertical",
       "contents": [
-        // 🌟 防呆按鈕：按錯了隨時可以返回重新選層格
+        // 🌟 精簡返回按鈕：短於 12 字，100% 完整顯示不出現「...」
         {
           "type": "button",
           "style": "secondary",
           "height": "md",
           "action": {
             "type": "message",
-            "label": `↩️ 返回 [${currentBoxLabel.length > 8 ? currentBoxLabel.substring(0, 7) + "..." : currentBoxLabel} 清單]`,
-            "text": `↩️ 返回 [${currentBoxLabel} 清單]`
+            "label": `↩️ 返回 [${cleanBoxName} 清單]`,
+            "text": `↩️ 返回 [${cleanBoxName} 清單]`
           }
         }
       ]
@@ -1231,7 +1256,7 @@ function replyFlexCreateSkuCard(replyToken, inputKeyword) {
 }
 
 function replyFlexPostStocktakeCard(replyToken, userName, fullChineseLocation, cellCode, itemName, qty, boxName) {
-  const currentBoxLabel = boxName || "同櫃子";
+  const currentBoxLabel = boxName ? (boxName.includes('-') ? boxName.split('-')[1].split('(')[0] : boxName.split('(')[0]) : "同櫃子";
   
   const flexContents = {
     "type": "bubble",
@@ -1284,7 +1309,7 @@ function replyFlexPostStocktakeCard(replyToken, userName, fullChineseLocation, c
           "margin": "sm",
           "action": {
             "type": "message",
-            "label": `🚪 盤點 [${currentBoxLabel.length > 8 ? currentBoxLabel.substring(0, 7) + "..." : currentBoxLabel}] 其他層格`,
+            "label": `🚪 盤點 [${currentBoxLabel}] 其他層格`,
             "text": CMD_CHANGE_SHELF_SAME_BOX
           }
         },
