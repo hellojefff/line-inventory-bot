@@ -1,6 +1,6 @@
 /**
- * 覺風物資管理系統 - 全網最防呆點選版 LINE Bot (長輩大字大按鈕 Flex 全面升級版)
- * 流程：選據點 -> 選樓層 -> 選空間 -> 選櫃位 -> 選櫃子 -> 選層格 -> 搜尋物資 -> 輸入數量
+ * 覺風物資管理系統 - 全網最防呆點選版 LINE Bot (直向上下圖卡 + 長輩大字大按鈕完整版)
+ * 流程：選據點 -> 選樓層 -> 選空間 -> 選櫃位 -> 選櫃子 -> 選層格 -> 搜尋物資(直向圖卡) -> 輸入數量
  */
 
 // ==================== 全局配置 ====================
@@ -236,7 +236,7 @@ function handleLineMessage(event) {
       replyTextMessage(replyToken, `📍 已定位格位：\n${cellCode}\n\n請開啟相機「掃描物品條碼」，或直接「輸入物品名稱關鍵字」進行搜尋：`);
       break;
       
-    // 📦 狀態 5：搜尋物資 (SKU)
+    // 📦 狀態 5：搜尋物資 (SKU) ➔ 🌟 升級：多筆時呈現直向大字圖卡
     case 'STATE_INPUT_SKU':
       const skus = findSKU(userMessage);
       
@@ -245,8 +245,9 @@ function handleLineMessage(event) {
         return;
       }
       
+      // 💡 找到多筆物資時，改用「直向上下排列」的大字圖卡
       if (skus.length > 1) {
-        replyFlexSkuCarousel(replyToken, skus.slice(0, 10));
+        replyFlexSkuVerticalList(replyToken, skus.slice(0, 6)); // 直向顯示前 6 筆，版面最清爽
         return;
       }
       
@@ -702,42 +703,36 @@ function replyTextMessage(replyToken, text) {
 }
 
 /**
- * 🌟 核心升級：長輩大字大按鈕 Flex 選單生成器
- * @param {string} replyToken - LINE 回覆 Token
- * @param {string} title - 卡片主標題 (大字)
- * @param {string} subtitle - 副標題/說明文字
- * @param {Array<{title: string, desc: string, value: string}>} items - 按鈕清單
- * @param {boolean} showBackBtn - 是否顯示大尺寸「回上一層」按鈕
+ * 長輩大字大按鈕 Flex 選單生成器 (場域/樓層/櫃位/層格)
  */
 function replyFlexMenuCard(replyToken, title, subtitle, items, showBackBtn = true) {
-  // 動態建立大字大點擊區的按鈕列
   const buttonRows = items.map(item => ({
     "type": "box",
     "layout": "vertical",
-    "backgroundColor": "#F0FDF4",      // 淺綠背景，視覺柔和清晰
-    "borderColor": "#16A34A",          // 鮮明綠色邊框
+    "backgroundColor": "#F0FDF4",
+    "borderColor": "#16A34A",
     "borderWidth": "1px",
-    "cornerRadius": "lg",              // 圓角大按鈕
-    "paddingAll": "lg",                // 大內距，增加點擊觸發面積
+    "cornerRadius": "lg",
+    "paddingAll": "lg",
     "margin": "md",
     "action": {
       "type": "message",
       "label": item.title.length > 20 ? item.title.substring(0, 17) + "..." : item.title,
-      "text": item.value               // 點選送出的真實值
+      "text": item.value
     },
     "contents": [
       {
         "type": "text",
         "text": item.title,
         "weight": "bold",
-        "size": "lg",                  // 🌟 超大字體 (19px)
+        "size": "lg",
         "color": "#15803D",
         "wrap": true
       },
       {
         "type": "text",
         "text": item.desc || "點擊選取",
-        "size": "sm",                  // 次要說明文字 (14px)
+        "size": "sm",
         "color": "#4B5563",
         "wrap": true,
         "margin": "xs"
@@ -763,7 +758,6 @@ function replyFlexMenuCard(replyToken, title, subtitle, items, showBackBtn = tru
     }
   };
 
-  // 加上長輩大字「回上一層」按鈕
   if (showBackBtn) {
     flexContents.footer = {
       "type": "box",
@@ -772,7 +766,7 @@ function replyFlexMenuCard(replyToken, title, subtitle, items, showBackBtn = tru
         {
           "type": "button",
           "style": "secondary",
-          "height": "md",             // 增加按鈕高度
+          "height": "md",
           "action": {
             "type": "message",
             "label": BTN_BACK_TEXT,
@@ -788,6 +782,92 @@ function replyFlexMenuCard(replyToken, title, subtitle, items, showBackBtn = tru
     messages: [{
       "type": "flex",
       "altText": title,
+      "contents": flexContents
+    }]
+  });
+}
+
+/**
+ * 🌟 核心升級：搜尋到多筆物資時，改為「直向上下大圖卡列表」
+ */
+function replyFlexSkuVerticalList(replyToken, skus) {
+  const skuRows = skus.map(s => {
+    const skuId = s['品項編號'] ? s['品項編號'].toString() : "未知";
+    const itemName = s['物品名稱'] ? s['物品名稱'].toString() : "未知名稱";
+    const cateName = s['大類'] ? s['大類'].toString() : "一般物資";
+
+    return {
+      "type": "box",
+      "layout": "vertical",
+      "backgroundColor": "#F9FAFB",
+      "borderColor": "#16A34A",
+      "borderWidth": "1px",
+      "cornerRadius": "lg",
+      "paddingAll": "lg",
+      "margin": "md",
+      "contents": [
+        {
+          "type": "text",
+          "text": `📁 ${cateName}`,
+          "weight": "bold",
+          "size": "sm",
+          "color": "#6B7280"
+        },
+        {
+          "type": "text",
+          "text": itemName,
+          "weight": "bold",
+          "size": "lg",           // 🌟 大字體物品名稱
+          "color": "#111827",
+          "wrap": true,
+          "margin": "xs"
+        },
+        {
+          "type": "text",
+          "text": `編號: ${skuId}`,
+          "size": "sm",
+          "color": "#9CA3AF",
+          "margin": "xs"
+        },
+        {
+          "type": "button",
+          "style": "primary",
+          "color": "#16A34A",      // 醒目綠色大按鈕
+          "height": "md",
+          "margin": "md",
+          "action": {
+            "type": "message",
+            "label": "👉 盤點此件",
+            "text": skuId
+          }
+        }
+      ]
+    };
+  });
+
+  const flexContents = {
+    "type": "bubble",
+    "header": {
+      "type": "box",
+      "layout": "vertical",
+      "backgroundColor": "#FAFAFA",
+      "contents": [
+        { "type": "text", "text": "📦 找到多筆物資", "weight": "bold", "size": "xl", "color": "#111827" },
+        { "type": "text", "text": "請由上往下瀏覽，點擊您要盤點的物品：", "size": "sm", "color": "#4B5563", "margin": "xs" }
+      ]
+    },
+    "body": {
+      "type": "box",
+      "layout": "vertical",
+      "contents": skuRows
+    }
+  };
+
+  sendToLine({
+    replyToken: replyToken,
+    messages: [{
+      "type": "flex",
+      "altText": "📦 找到多筆物資資料",
       "contents": flexContents
     }]
   });
@@ -815,54 +895,6 @@ function replyFlexSkuCard(replyToken, itemName, skuId, cateName) {
     }
   };
   sendToLine({ replyToken: replyToken, messages: [{ "type": "flex", "altText": "📦 找到物資資料", "contents": flexContents }] });
-}
-
-function replyFlexSkuCarousel(replyToken, skus) {
-  const bubbles = skus.map(s => {
-    const skuId = s['品項編號'] ? s['品項編號'].toString() : "未知";
-    const itemName = s['物品名稱'] ? s['物品名稱'].toString() : "未知名稱";
-    const cateName = s['大類'] ? s['大類'].toString() : "一般物資";
-
-    return {
-      "type": "bubble",
-      "size": "kilo",                 // 放大卡片尺寸
-      "body": {
-        "type": "box",
-        "layout": "vertical",
-        "contents": [
-          { "type": "text", "text": `📁 ${cateName}`, "weight": "bold", "color": "#6B7280", "size": "sm" },
-          { "type": "text", "text": itemName, "weight": "bold", "size": "md", "margin": "sm", "wrap": true, "maxLines": 3 },
-          { "type": "text", "text": `編號: ${skuId}`, "color": "#9CA3AF", "size": "sm", "margin": "md" }
-        ]
-      },
-      "footer": {
-        "type": "box",
-        "layout": "vertical",
-        "contents": [
-          {
-            "type": "button",
-            "style": "primary",
-            "color": "#16A34A",
-            "height": "md",
-            "action": {
-              "type": "message",
-              "label": "👉 盤點此件",
-              "text": skuId
-            }
-          }
-        ]
-      }
-    };
-  });
-
-  sendToLine({
-    replyToken: replyToken,
-    messages: [{
-      "type": "flex",
-      "altText": "📦 找到多筆物資資料",
-      "contents": { "type": "carousel", "contents": bubbles }
-    }]
-  });
 }
 
 function sendToLine(payload) {
