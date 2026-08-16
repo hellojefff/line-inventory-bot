@@ -1,12 +1,17 @@
 /**
- * 覺風物資管理系統 - 全網最防呆點選版 LINE Bot (直向上下圖卡 + 長輩大字大按鈕完整版)
- * 流程：選據點 -> 選樓層 -> 選空間 -> 選櫃位 -> 選櫃子 -> 選層格 -> 搜尋物資(直向圖卡) -> 輸入數量
+ * 覺風物資管理系統 - 全網最防呆點選版 LINE Bot (連續盤點情境優化版)
+ * 核心升級：盤點成功後提供「同格下一件 / 同空間換櫃 / 換新據點」三大情境導航
  */
 
 // ==================== 全局配置 ====================
 const SPREADSHEET_ID = '13J32Ewv0PVL8o6hEoJUCuK2Ur5pBEnHO90tdG7XxtC8'; 
 const LINE_ACCESS_TOKEN = 'fstqDcGULaFwMfSL2jm1cTFgCo8Qewut0IeKvyHAwfsaL0Qd869L00YFJiHnpU7J1+oNistrv81ZAI4CrV8QeMJl3BXmm13ZEOHDqOoviFCVW17H3ObQdKFAJS54sGGA/4IFoLQUwh41EDRN36bg+wdB04t89/1O/w1cDnyilFU='; 
 const BTN_BACK_TEXT = '↩️ 回上一層';
+
+// 連續盤點指令常數
+const CMD_NEXT_SKU_SAME_CELL = 'CMD_NEXT_SKU_SAME_CELL';
+const CMD_CHANGE_BOX_SAME_ROOM = 'CMD_CHANGE_BOX_SAME_ROOM';
+const CMD_CHANGE_SITE = 'CMD_CHANGE_SITE';
 
 // ==================== Webhook 進入點 ====================
 function doPost(e) {
@@ -236,7 +241,7 @@ function handleLineMessage(event) {
       replyTextMessage(replyToken, `📍 已定位格位：\n${cellCode}\n\n請開啟相機「掃描物品條碼」，或直接「輸入物品名稱關鍵字」進行搜尋：`);
       break;
       
-    // 📦 狀態 5：搜尋物資 (SKU) ➔ 🌟 升級：多筆時呈現直向大字圖卡
+    // 📦 狀態 5：搜尋物資 (SKU)
     case 'STATE_INPUT_SKU':
       const skus = findSKU(userMessage);
       
@@ -245,9 +250,8 @@ function handleLineMessage(event) {
         return;
       }
       
-      // 💡 找到多筆物資時，改用「直向上下排列」的大字圖卡
       if (skus.length > 1) {
-        replyFlexSkuVerticalList(replyToken, skus.slice(0, 6)); // 直向顯示前 6 筆，版面最清爽
+        replyFlexSkuVerticalList(replyToken, skus.slice(0, 6));
         return;
       }
       
@@ -261,7 +265,7 @@ function handleLineMessage(event) {
       replyFlexSkuCard(replyToken, session.itemName, session.skuId, cateName);
       break;  
 
-    // 🔢 狀態 6：輸入數量
+    // 🔢 狀態 6：輸入數量 ➔ 🌟 盤點成功後進入連續盤點導航
     case 'STATE_INPUT_QTY':
       if (userMessage === session.skuId) {
         replyTextMessage(replyToken, `請在對話框中直接輸入本次盤點的【實清數量】數字（例如：5）：`);
@@ -277,13 +281,86 @@ function handleLineMessage(event) {
       const success = executeUpdateStockWorkflow(myUserId, session.cellCode, session.skuId, session.itemName, qty);
       
       if (success) {
-        cache.remove(lineUid); 
-        replyTextMessage(replyToken, `✅ 盤點紀錄更新成功！\n\n經手人員：${myName}\n格位：${session.cellCode}\n物品：${session.itemName}\n實清數量：${qty} 本/套\n\n資料已同步更新。若要繼續盤點，請輸入「開始盤點」。`);
+        // 保持快取，切換至「盤點後選擇」狀態
+        session.state = 'STATE_POST_STOCKTAKE';
+        session.lastItemName = session.itemName;
+        session.lastQty = qty;
+        cache.put(lineUid, JSON.stringify(session), 1800); // 延長快取至 30 分鐘
+
+        // 噴出三大情境導航圖卡
+        replyFlexPostStocktakeCard(replyToken, myName, session.cellCode, session.itemName, qty);
       } else {
         replyTextMessage(replyToken, `❌ 寫入失敗：資料庫關聯驗證未通過，請檢查人員主檔與品項主檔。`);
       }
       break;
+
+    // 🌟 新增狀態 7：盤點後連續作業導航控制器
+    case 'STATE_POST_STOCKTAKE':
+      handlePostStocktakeAction(replyToken, lineUid, session, userMessage, myName);
+      break;
   }
+}
+
+// ==================== 盤點完成後連續作業分流器 ====================
+
+/**
+ * 處理「同格下一件 / 換同空間其他櫃 / 換新據點空間」三大情境
+ */
+function handlePostStocktakeAction(replyToken, lineUid, session, userMessage, userName) {
+  const cache = CacheService.getUserCache();
+
+  // 情境 1-A：在同一個層格，盤點下一件物品
+  if (userMessage === CMD_NEXT_SKU_SAME_CELL) {
+    session.state = 'STATE_INPUT_SKU';
+    cache.put(lineUid, JSON.stringify(session), 1800);
+    replyTextMessage(replyToken, `📍 繼續盤點目前格位：\n${session.cellCode}\n\n請開啟相機「掃描物品條碼」，或「輸入物品名稱關鍵字」進行搜尋：`);
+    return;
+  }
+
+  // 情境 1-B：留在同一個空間（如：小教室），挑選其他櫃位或區域
+  if (userMessage === CMD_CHANGE_BOX_SAME_ROOM) {
+    const zones = getZonesByLocation(session.locId || "");
+    if (zones.length === 0) {
+      replyTextMessage(replyToken, "⚠️ 查無該空間的其他櫃位，請重新選擇據點。");
+      return;
+    }
+    session.state = 'STATE_CHOOSE_ZONE';
+    cache.put(lineUid, JSON.stringify(session), 1800);
+    const zoneItems = zones.map(z => ({ title: z.zone_name, desc: `編碼：${z.zone_id}`, value: z.zone_id }));
+    replyFlexMenuCard(replyToken, "🗄️ 選擇同空間其他櫃位", `目前所在空間：${session.locId}\n請點選要盤點的【櫃位/區域】：`, zoneItems, true);
+    return;
+  }
+
+  // 情境 2：更換到其他據點或空間（重新從據點選起）
+  if (userMessage === CMD_CHANGE_SITE || userMessage === '開始盤點') {
+    const sites = getAllSites();
+    session.state = 'STATE_CHOOSE_SITE';
+    cache.put(lineUid, JSON.stringify(session), 1800);
+    const siteItems = sites.map(s => ({ title: s, desc: "點擊進入此據點", value: s }));
+    replyFlexMenuCard(replyToken, "🙏 選擇新盤點據點", `${userName} 您好，請點選您要前往的【據點】：`, siteItems, false);
+    return;
+  }
+
+  // 防呆：如果志工直接輸入關鍵字搜尋物資，自動認定為「同格位搜尋」
+  const skus = findSKU(userMessage);
+  if (skus.length > 0) {
+    session.state = 'STATE_INPUT_SKU';
+    cache.put(lineUid, JSON.stringify(session), 1800);
+    if (skus.length > 1) {
+      replyFlexSkuVerticalList(replyToken, skus.slice(0, 6));
+    } else {
+      const targetSku = skus[0];
+      session.state = 'STATE_INPUT_QTY';
+      session.skuId = targetSku['品項編號'] ? targetSku['品項編號'].toString() : "未知";
+      session.itemName = targetSku['物品名稱'] ? targetSku['物品名稱'].toString() : "未知名稱";
+      const cateName = targetSku['大類'] ? targetSku['大類'].toString() : "一般物資"; 
+      cache.put(lineUid, JSON.stringify(session), 1800);
+      replyFlexSkuCard(replyToken, session.itemName, session.skuId, cateName);
+    }
+    return;
+  }
+
+  replyTextMessage(replyToken, "請點選上方按鈕選擇「同格位繼續」、「換同空間其他櫃」或「換據點」。");
 }
 
 // ==================== 「回上一層」狀態倒退控制器 ====================
@@ -702,9 +779,6 @@ function replyTextMessage(replyToken, text) {
   sendToLine({ replyToken: replyToken, messages: [{ type: 'text', text: text }] });
 }
 
-/**
- * 長輩大字大按鈕 Flex 選單生成器 (場域/樓層/櫃位/層格)
- */
 function replyFlexMenuCard(replyToken, title, subtitle, items, showBackBtn = true) {
   const buttonRows = items.map(item => ({
     "type": "box",
@@ -788,8 +862,91 @@ function replyFlexMenuCard(replyToken, title, subtitle, items, showBackBtn = tru
 }
 
 /**
- * 🌟 核心升級：搜尋到多筆物資時，改為「直向上下大圖卡列表」
+ * 🌟 核心新增：盤點完成後三大情境選擇卡片 (大字大按鈕)
  */
+function replyFlexPostStocktakeCard(replyToken, userName, cellCode, itemName, qty) {
+  const flexContents = {
+    "type": "bubble",
+    "header": {
+      "type": "box",
+      "layout": "vertical",
+      "backgroundColor": "#ECFDF5",
+      "contents": [
+        { "type": "text", "text": "✅ 盤點紀錄更新成功！", "weight": "bold", "size": "xl", "color": "#065F46" },
+        { "type": "text", "text": `經手人員：${userName}`, "size": "sm", "color": "#047857", "margin": "xs" }
+      ]
+    },
+    "body": {
+      "type": "box",
+      "layout": "vertical",
+      "contents": [
+        {
+          "type": "box",
+          "layout": "vertical",
+          "backgroundColor": "#F9FAFB",
+          "paddingAll": "md",
+          "cornerRadius": "md",
+          "contents": [
+            { "type": "text", "text": `📍 目前格位：${cellCode}`, "weight": "bold", "size": "sm", "color": "#374151" },
+            { "type": "text", "text": `📦 物品：${itemName}`, "size": "md", "weight": "bold", "color": "#111827", "margin": "xs" },
+            { "type": "text", "text": `🔢 實清數量：${qty} 本/套`, "size": "sm", "color": "#059669", "margin": "xs" }
+          ]
+        },
+        { "type": "separator", "margin": "lg" },
+        { "type": "text", "text": "下一步您想要：", "weight": "bold", "size": "md", "color": "#111827", "margin": "lg" },
+        
+        // 按鈕 1：同格位下一件 (主按鈕 綠色)
+        {
+          "type": "button",
+          "style": "primary",
+          "color": "#16A34A",
+          "height": "md",
+          "margin": "md",
+          "action": {
+            "type": "message",
+            "label": "📦 同格位盤點下一件物品",
+            "text": CMD_NEXT_SKU_SAME_CELL
+          }
+        },
+        // 按鈕 2：同空間換櫃位 (次要按鈕 藍綠色)
+        {
+          "type": "button",
+          "style": "primary",
+          "color": "#0D9488",
+          "height": "md",
+          "margin": "sm",
+          "action": {
+            "type": "message",
+            "label": "🗄️ 盤點此空間其他櫃位/層格",
+            "text": CMD_CHANGE_BOX_SAME_ROOM
+          }
+        },
+        // 按鈕 3：更換據點或空間 (灰色按鈕)
+        {
+          "type": "button",
+          "style": "secondary",
+          "height": "md",
+          "margin": "sm",
+          "action": {
+            "type": "message",
+            "label": "🏛️ 更換其他據點/空間",
+            "text": CMD_CHANGE_SITE
+          }
+        }
+      ]
+    }
+  };
+
+  sendToLine({
+    replyToken: replyToken,
+    messages: [{
+      "type": "flex",
+      "altText": "✅ 盤點更新成功，請選擇下一步",
+      "contents": flexContents
+    }]
+  });
+}
+
 function replyFlexSkuVerticalList(replyToken, skus) {
   const skuRows = skus.map(s => {
     const skuId = s['品項編號'] ? s['品項編號'].toString() : "未知";
@@ -806,40 +963,16 @@ function replyFlexSkuVerticalList(replyToken, skus) {
       "paddingAll": "lg",
       "margin": "md",
       "contents": [
-        {
-          "type": "text",
-          "text": `📁 ${cateName}`,
-          "weight": "bold",
-          "size": "sm",
-          "color": "#6B7280"
-        },
-        {
-          "type": "text",
-          "text": itemName,
-          "weight": "bold",
-          "size": "lg",           // 🌟 大字體物品名稱
-          "color": "#111827",
-          "wrap": true,
-          "margin": "xs"
-        },
-        {
-          "type": "text",
-          "text": `編號: ${skuId}`,
-          "size": "sm",
-          "color": "#9CA3AF",
-          "margin": "xs"
-        },
+        { "type": "text", "text": `📁 ${cateName}`, "weight": "bold", "size": "sm", "color": "#6B7280" },
+        { "type": "text", "text": itemName, "weight": "bold", "size": "lg", "color": "#111827", "wrap": true, "margin": "xs" },
+        { "type": "text", "text": `編號: ${skuId}`, "size": "sm", "color": "#9CA3AF", "margin": "xs" },
         {
           "type": "button",
           "style": "primary",
-          "color": "#16A34A",      // 醒目綠色大按鈕
+          "color": "#16A34A",
           "height": "md",
           "margin": "md",
-          "action": {
-            "type": "message",
-            "label": "👉 盤點此件",
-            "text": skuId
-          }
+          "action": { "type": "message", "label": "👉 盤點此件", "text": skuId }
         }
       ]
     };
