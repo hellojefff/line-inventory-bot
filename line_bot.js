@@ -9,7 +9,7 @@ const LINE_ACCESS_TOKEN = 'fstqDcGULaFwMfSL2jm1cTFgCo8Qewut0IeKvyHAwfsaL0Qd869L0
 const BTN_BACK_PREFIX = '↩️ 返回';
 
 // 🌟 盤點中小和尚圖片網址 (可替換為您的公開圖片圖床連結)
-const MONK_IMG_URL = 'https://i.imgur.com/8Q9Z5rL.png'; 
+const MONK_IMG_URL = 'https://raw.githubusercontent.com/hellojefff/line-inventory-bot/main/assets/monk_stocktake.png'; 
 
 // 系統核心控制指令常數
 const CMD_NEXT_SKU_SAME_CELL = 'CMD_NEXT_SKU_SAME_CELL';
