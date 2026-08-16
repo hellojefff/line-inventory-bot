@@ -1,6 +1,6 @@
 /**
- * 覺風物資管理系統 - 全網最防呆點選版 LINE Bot (全域指令優先攔截修復版)
- * 核心修復：建立全域指令優先攔截門閥，徹底杜絕 CMD 指令被當作物資名稱搜尋或建檔之 Bug
+ * 覺風物資管理系統 - 全網最防呆點選版 LINE Bot (去相機掃碼純文字搜尋優化版)
+ * 核心升級：全面去除「相機掃描條碼」提示，改為長輩最直覺的純文字物品名稱搜尋
  */
 
 // ==================== 全局配置 ====================
@@ -114,13 +114,13 @@ function handleLineMessage(event) {
 
   const session = JSON.parse(cachedState);
 
-  // 🌟 核心防禦 1：全域優先攔截「返回按鈕」
+  // 🌟 全域優先攔截「返回按鈕」
   if (userMessage.startsWith(BTN_BACK_PREFIX)) {
     handleGoBack(replyToken, lineUid, session, myName);
     return;
   }
 
-  // 🌟 核心防禦 2：全域優先攔截「系統操作指令」，絕不流進物資搜尋或文字處理
+  // 🌟 全域優先攔截「系統操作指令」
   if (isSystemControlCommand(userMessage)) {
     handleSystemCommand(replyToken, lineUid, session, userMessage, myName);
     return;
@@ -235,7 +235,7 @@ function handleLineMessage(event) {
       replyFlexMenuCard(replyToken, "🚪 選擇盤點層格", `已對齊櫃體：【${selectedBoxStr}】\n請點選具體【層格】：`, shelfItems, `↩️ 返回 [${session.zoneName || "櫃位分區"}]`);
       break;
       
-    // 📍 狀態 4：點選微細層格 ➔ 導向搜尋物資
+    // 📍 狀態 4：點選微細層格 ➔ 導向搜尋物資 (去相機掃碼文案)
     case 'STATE_CHOOSE_CELL':
       let cellCode = userMessage.toUpperCase().trim();
       
@@ -257,14 +257,14 @@ function handleLineMessage(event) {
       session.shelfName = matchedShelf.name;
       cache.put(lineUid, JSON.stringify(session), 1200);
       
-      replyTextMessage(replyToken, `📍 已定位格位：\n【${session.spaceName} - ${session.boxName} - ${matchedShelf.name}】\n(${cellCode})\n\n請開啟相機「掃描物品條碼」，或直接「輸入物品名稱關鍵字」進行搜尋：`);
+      // 🌟 精簡文案：直接提示在對話框輸入物品名稱或關鍵字
+      replyTextMessage(replyToken, `📍 已定位格位：\n【${session.spaceName} - ${session.boxName} - ${matchedShelf.name}】\n(${cellCode})\n\n🔍 請在下方對話框輸入【物品名稱】或關鍵字進行搜尋：`);
       break;
       
     // 📦 狀態 5：搜尋物資 (SKU)
     case 'STATE_INPUT_SKU':
       const skus = findSKU(userMessage);
       
-      // 查無品項：引導選擇「自訂輸入完整品名」或「直接以關鍵字建檔」
       if (skus.length === 0) {
         session.state = 'STATE_CONFIRM_CREATE_SKU';
         session.pendingItemName = userMessage;
@@ -307,11 +307,10 @@ function handleLineMessage(event) {
       if (userMessage === CMD_RETRY_SEARCH_SKU) {
         session.state = 'STATE_INPUT_SKU';
         cache.put(lineUid, JSON.stringify(session), 1200);
-        replyTextMessage(replyToken, `請重新「輸入物品名稱關鍵字」或開啟相機掃描條碼：`);
+        replyTextMessage(replyToken, `🔍 請重新輸入【物品名稱】或關鍵字進行搜尋：`);
         return;
       }
 
-      // 若輸入其他文字，當作新的關鍵字重新搜尋
       session.state = 'STATE_INPUT_SKU';
       handleLineMessage(event);
       break;
@@ -358,9 +357,6 @@ function handleLineMessage(event) {
 
 // ==================== 全域系統指令判斷與分流控制器 ====================
 
-/**
- * 檢查輸入是否為系統控制指令
- */
 function isSystemControlCommand(msg) {
   const commands = [
     CMD_NEXT_SKU_SAME_CELL,
@@ -374,9 +370,6 @@ function isSystemControlCommand(msg) {
   return commands.includes(msg);
 }
 
-/**
- * 集中處理所有系統控制指令，確保不污染資料庫與搜尋
- */
 function handleSystemCommand(replyToken, lineUid, session, userMessage, userName) {
   const cache = CacheService.getUserCache();
 
@@ -384,7 +377,7 @@ function handleSystemCommand(replyToken, lineUid, session, userMessage, userName
   if (userMessage === CMD_NEXT_SKU_SAME_CELL) {
     session.state = 'STATE_INPUT_SKU';
     cache.put(lineUid, JSON.stringify(session), 1800);
-    replyTextMessage(replyToken, `📍 繼續盤點目前格位：\n【${session.spaceName || ""} - ${session.boxName || ""} - ${session.shelfName || ""}】\n(${session.cellCode})\n\n請開啟相機「掃描物品條碼」，或「輸入物品名稱關鍵字」進行搜尋：`);
+    replyTextMessage(replyToken, `📍 繼續盤點目前格位：\n【${session.spaceName || ""} - ${session.boxName || ""} - ${session.shelfName || ""}】\n(${session.cellCode})\n\n🔍 請在下方對話框輸入【物品名稱】或關鍵字進行搜尋：`);
     return;
   }
 
@@ -417,7 +410,7 @@ function handleSystemCommand(replyToken, lineUid, session, userMessage, userName
     return;
   }
 
-  // 4. 更換其他據點/空間 (一鍵返回據點大選單)
+  // 4. 更換其他據點/空間
   if (userMessage === CMD_CHANGE_SITE) {
     const sites = getAllSites();
     session.state = 'STATE_CHOOSE_SITE';
@@ -446,7 +439,7 @@ function handleSystemCommand(replyToken, lineUid, session, userMessage, userName
   if (userMessage === CMD_RETRY_SEARCH_SKU) {
     session.state = 'STATE_INPUT_SKU';
     cache.put(lineUid, JSON.stringify(session), 1200);
-    replyTextMessage(replyToken, `請重新「輸入物品名稱關鍵字」或開啟相機掃描條碼：`);
+    replyTextMessage(replyToken, `🔍 請重新輸入【物品名稱】或關鍵字進行搜尋：`);
     return;
   }
 }
@@ -456,11 +449,10 @@ function handleSystemCommand(replyToken, lineUid, session, userMessage, userName
 function executeCreateSkuAndProceed(replyToken, lineUid, session, itemName) {
   const cache = CacheService.getUserCache();
 
-  // 🛡️ 嚴格防呆：禁止將系統指令字串當作品名寫入
   if (isSystemControlCommand(itemName) || itemName.startsWith('CMD_')) {
     session.state = 'STATE_INPUT_SKU';
     cache.put(lineUid, JSON.stringify(session), 1200);
-    replyTextMessage(replyToken, `⚠️ 輸入無效，請直接輸入物資的真實名稱（例如：免洗紙盤）：`);
+    replyTextMessage(replyToken, `⚠️ 輸入無效，請直接輸入物品名稱（例如：紙盤）：`);
     return;
   }
 
