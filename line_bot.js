@@ -1,6 +1,6 @@
 /**
- * 覺風物資管理系統 - 全網最防呆點選版 LINE Bot (即時更正補救與溫馨圖卡版)
- * 核心升級：支援「修改品名 / 更正數量 / 刪除紀錄」，更正完成彈出小和尚圖片與溫馨提醒
+ * 覺風物資管理系統 - 全網最防呆點選版 LINE Bot (結束盤點圖文推播完整版)
+ * 核心升級：結束盤點時先發送 GitHub finish.png 插圖，再附上個人化感謝溫馨文字
  */
 
 // ==================== 全局配置 ====================
@@ -8,8 +8,9 @@ const SPREADSHEET_ID = '13J32Ewv0PVL8o6hEoJUCuK2Ur5pBEnHO90tdG7XxtC8';
 const LINE_ACCESS_TOKEN = 'fstqDcGULaFwMfSL2jm1cTFgCo8Qewut0IeKvyHAwfsaL0Qd869L00YFJiHnpU7J1+oNistrv81ZAI4CrV8QeMJl3BXmm13ZEOHDqOoviFCVW17H3ObQdKFAJS54sGGA/4IFoLQUwh41EDRN36bg+wdB04t89/1O/w1cDnyilFU='; 
 const BTN_BACK_PREFIX = '↩️ 返回';
 
-// 🌟 盤點中小和尚圖片網址 (可替換為您的公開圖片圖床連結)
+// 🌟 GitHub Raw 圖片直連網址配置
 const MONK_IMG_URL = 'https://raw.githubusercontent.com/hellojefff/line-inventory-bot/main/assets/monk_stocktake.png'; 
+const FINISH_IMG_URL = 'https://raw.githubusercontent.com/hellojefff/line-inventory-bot/main/assets/finish.png'; 
 
 // 系統核心控制指令常數
 const CMD_NEXT_SKU_SAME_CELL = 'CMD_NEXT_SKU_SAME_CELL';
@@ -21,7 +22,7 @@ const CMD_INPUT_DETAILED_SKU = 'CMD_INPUT_DETAILED_SKU';
 const CMD_RETRY_SEARCH_SKU = 'CMD_RETRY_SEARCH_SKU';
 const CMD_EXIT_STOCKTAKE = 'CMD_EXIT_STOCKTAKE';
 
-// 🌟 補救更正指令常數
+// 補救更正指令常數
 const CMD_START_CORRECTION = 'CMD_START_CORRECTION';
 const CMD_CORRECT_NAME = 'CMD_CORRECT_NAME';
 const CMD_CORRECT_QTY = 'CMD_CORRECT_QTY';
@@ -108,10 +109,10 @@ function handleLineMessage(event) {
     return;
   }
 
-  // 🚪 志工隨時可以主動選擇「結束盤點」
+  // 🚪 🌟 核心升級：結束盤點圖文發送
   if (userMessage === CMD_EXIT_STOCKTAKE || userMessage === '結束盤點') {
     cache.remove(lineUid);
-    replyTextMessage(replyToken, `🙏 ${myName} 您好，已為您安全結束本次盤點作業。\n\n感謝您的發心付出！如需再次盤點，請隨時點選下方「📷 開始盤點」。`);
+    replyExitStocktakeWithImage(replyToken, myName);
     return;
   }
 
@@ -498,13 +499,13 @@ function handleSystemCommand(replyToken, lineUid, session, userMessage, userName
     return;
   }
 
-  // 🌟 8. 啟動即時補救與更正流程
+  // 8. 啟動即時補救與更正流程
   if (userMessage === CMD_START_CORRECTION) {
     replyFlexCorrectionMenu(replyToken, session.lastItemName, session.lastQty);
     return;
   }
 
-  // 🌟 8-A. 選擇修改品名
+  // 8-A. 選擇修改品名
   if (userMessage === CMD_CORRECT_NAME) {
     session.state = 'STATE_CORRECT_ITEM_NAME';
     cache.put(lineUid, JSON.stringify(session), 1200);
@@ -512,7 +513,7 @@ function handleSystemCommand(replyToken, lineUid, session, userMessage, userName
     return;
   }
 
-  // 🌟 8-B. 選擇更正數量
+  // 8-B. 選擇更正數量
   if (userMessage === CMD_CORRECT_QTY) {
     session.state = 'STATE_CORRECT_QTY';
     cache.put(lineUid, JSON.stringify(session), 1200);
@@ -520,7 +521,7 @@ function handleSystemCommand(replyToken, lineUid, session, userMessage, userName
     return;
   }
 
-  // 🌟 8-C. 刪除剛才這筆紀錄
+  // 8-C. 刪除剛才這筆紀錄
   if (userMessage === CMD_DELETE_LAST_LOG) {
     deleteLastRecord(session.cellCode, session.lastSkuId);
     session.state = 'STATE_INPUT_SKU';
@@ -631,13 +632,9 @@ function handleGoBack(replyToken, lineUid, session, userName) {
 
 // ==================== 資料庫資料修正與刪除補救核心 ====================
 
-/**
- * 修改品項名稱（同步更新 SKU_MASTER, STOCKTAKE_LOG 與 CURRENT_STOCK）
- */
 function correctLastItemName(skuId, newItemName, cellCode) {
   const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
   
-  // 1. 更新 SKU_MASTER
   const skuSheet = ss.getSheetByName("SKU_MASTER");
   if (skuSheet) {
     const data = skuSheet.getDataRange().getValues();
@@ -651,7 +648,6 @@ function correctLastItemName(skuId, newItemName, cellCode) {
     }
   }
 
-  // 2. 更新 STOCKTAKE_LOG 最後一筆
   const logSheet = ss.getSheetByName("STOCKTAKE_LOG");
   if (logSheet) {
     const lastRow = logSheet.getLastRow();
@@ -662,7 +658,6 @@ function correctLastItemName(skuId, newItemName, cellCode) {
     }
   }
 
-  // 3. 更新 CURRENT_STOCK
   const stockSheet = ss.getSheetByName("CURRENT_STOCK");
   if (stockSheet) {
     const data = stockSheet.getDataRange().getValues();
@@ -678,13 +673,9 @@ function correctLastItemName(skuId, newItemName, cellCode) {
   }
 }
 
-/**
- * 更正實清數量（同步更新 STOCKTAKE_LOG 與 CURRENT_STOCK）
- */
 function correctLastQty(cellCode, skuId, newQty) {
   const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
   
-  // 1. 更新 STOCKTAKE_LOG 最後一筆
   const logSheet = ss.getSheetByName("STOCKTAKE_LOG");
   if (logSheet) {
     const lastRow = logSheet.getLastRow();
@@ -695,7 +686,6 @@ function correctLastQty(cellCode, skuId, newQty) {
     }
   }
 
-  // 2. 更新 CURRENT_STOCK
   const stockSheet = ss.getSheetByName("CURRENT_STOCK");
   if (stockSheet) {
     const data = stockSheet.getDataRange().getValues();
@@ -711,19 +701,14 @@ function correctLastQty(cellCode, skuId, newQty) {
   }
 }
 
-/**
- * 刪除最後一筆盤點紀錄
- */
 function deleteLastRecord(cellCode, skuId) {
   const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
   
-  // 1. 刪除 STOCKTAKE_LOG 最後一列
   const logSheet = ss.getSheetByName("STOCKTAKE_LOG");
   if (logSheet && logSheet.getLastRow() > 1) {
     logSheet.deleteRow(logSheet.getLastRow());
   }
 
-  // 2. 清除 CURRENT_STOCK 該格位該品項
   const stockSheet = ss.getSheetByName("CURRENT_STOCK");
   if (stockSheet) {
     const data = stockSheet.getDataRange().getValues();
@@ -1189,6 +1174,26 @@ function replyTextMessage(replyToken, text) {
   sendToLine({ replyToken: replyToken, messages: [{ type: 'text', text: text }] });
 }
 
+/**
+ * 🌟 核心新增：結束盤點發送圖片 + 感謝文字
+ */
+function replyExitStocktakeWithImage(replyToken, userName) {
+  sendToLine({
+    replyToken: replyToken,
+    messages: [
+      {
+        "type": "image",
+        "originalContentUrl": FINISH_IMG_URL,
+        "previewImageUrl": FINISH_IMG_URL
+      },
+      {
+        "type": "text",
+        "text": `🙏 ${userName} 您好，已為您安全結束本次盤點作業。\n\n感謝您的發心付出！如需再次盤點，請隨時點選下方「📷 開始盤點」。`
+      }
+    ]
+  });
+}
+
 function replyFlexMenuCard(replyToken, title, subtitle, items, backBtnLabel = null) {
   const buttonRows = items.map(item => ({
     "type": "box",
@@ -1446,9 +1451,6 @@ function replyFlexCreateSkuCard(replyToken, inputKeyword) {
   });
 }
 
-/**
- * 🌟 核心升級：成功卡片新增「✏️ 剛才打錯了？立即更正」按鈕
- */
 function replyFlexPostStocktakeCard(replyToken, userName, fullChineseLocation, cellCode, itemName, qty, boxName) {
   const currentBoxLabel = boxName ? (boxName.includes('-') ? boxName.split('-')[1].split('(')[0] : boxName.split('(')[0]) : "同櫃子";
   
@@ -1460,211 +1462,6 @@ function replyFlexPostStocktakeCard(replyToken, userName, fullChineseLocation, c
       "backgroundColor": "#ECFDF5",
       "contents": [
         { "type": "text", "text": "✅ 盤點紀錄更新成功！", "weight": "bold", "size": "xl", "color": "#065F46" },
-        { "type": "text", "text": `經手人員：${userName}`, "size": "sm", "color": "#047857", "margin": "xs" }
-      ]
-    },
-    "body": {
-      "type": "box",
-      "layout": "vertical",
-      "contents": [
-        {
-          "type": "box",
-          "layout": "vertical",
-          "backgroundColor": "#F9FAFB",
-          "paddingAll": "md",
-          "cornerRadius": "md",
-          "contents": [
-            { "type": "text", "text": `📍 位置：${fullChineseLocation}`, "weight": "bold", "size": "sm", "color": "#374151", "wrap": true },
-            { "type": "text", "text": `代碼：${cellCode}`, "size": "xs", "color": "#9CA3AF", "margin": "xs" },
-            { "type": "text", "text": `📦 物品：${itemName}`, "size": "md", "weight": "bold", "color": "#111827", "margin": "sm" },
-            { "type": "text", "text": `🔢 實清數量：${qty} 本/套`, "size": "sm", "color": "#059669", "margin": "xs" }
-          ]
-        },
-        // 🌟 方案 A 核心入口：打錯了立即更正
-        {
-          "type": "button",
-          "style": "primary",
-          "color": "#F59E0B", // 醒目橘黃色按鈕
-          "height": "md",
-          "margin": "md",
-          "action": {
-            "type": "message",
-            "label": "✏️ 剛才打錯了？立即更正",
-            "text": CMD_START_CORRECTION
-          }
-        },
-        { "type": "separator", "margin": "lg" },
-        { "type": "text", "text": "下一步您想要：", "weight": "bold", "size": "md", "color": "#111827", "margin": "lg" },
-        
-        {
-          "type": "button",
-          "style": "primary",
-          "color": "#16A34A",
-          "height": "md",
-          "margin": "md",
-          "action": {
-            "type": "message",
-            "label": "📦 同格位盤點下一件物品",
-            "text": CMD_NEXT_SKU_SAME_CELL
-          }
-        },
-        {
-          "type": "button",
-          "style": "primary",
-          "color": "#2563EB",
-          "height": "md",
-          "margin": "sm",
-          "action": {
-            "type": "message",
-            "label": `🚪 盤點 [${currentBoxLabel}] 其他層格`,
-            "text": CMD_CHANGE_SHELF_SAME_BOX
-          }
-        },
-        {
-          "type": "button",
-          "style": "primary",
-          "color": "#0D9488",
-          "height": "md",
-          "margin": "sm",
-          "action": {
-            "type": "message",
-            "label": "🗄️ 盤點此空間其他櫃位",
-            "text": CMD_CHANGE_BOX_SAME_ROOM
-          }
-        },
-        {
-          "type": "button",
-          "style": "secondary",
-          "height": "md",
-          "margin": "sm",
-          "action": {
-            "type": "message",
-            "label": "🏛️ 更換其他據點/空間",
-            "text": CMD_CHANGE_SITE
-          }
-        },
-        {
-          "type": "button",
-          "style": "secondary",
-          "height": "md",
-          "margin": "sm",
-          "action": {
-            "type": "message",
-            "label": "🚪 結束盤點 (回主選單)",
-            "text": CMD_EXIT_STOCKTAKE
-          }
-        }
-      ]
-    }
-  };
-
-  sendToLine({
-    replyToken: replyToken,
-    messages: [{
-      "type": "flex",
-      "altText": "✅ 盤點更新成功，請選擇下一步",
-      "contents": flexContents
-    }]
-  });
-}
-
-/**
- * 🌟 核心新增：補救與更正選單卡片
- */
-function replyFlexCorrectionMenu(replyToken, currentItemName, currentQty) {
-  const flexContents = {
-    "type": "bubble",
-    "header": {
-      "type": "box",
-      "layout": "vertical",
-      "backgroundColor": "#FFFBEB",
-      "contents": [
-        { "type": "text", "text": "✏️ 盤點紀錄即時更正", "weight": "bold", "size": "xl", "color": "#B45309" },
-        { "type": "text", "text": "請選擇您要修正的項目：", "size": "sm", "color": "#92400E", "margin": "xs" }
-      ]
-    },
-    "body": {
-      "type": "box",
-      "layout": "vertical",
-      "contents": [
-        {
-          "type": "box",
-          "layout": "vertical",
-          "backgroundColor": "#F9FAFB",
-          "paddingAll": "md",
-          "cornerRadius": "md",
-          "contents": [
-            { "type": "text", "text": `當前物品：${currentItemName}`, "weight": "bold", "size": "sm", "color": "#374151" },
-            { "type": "text", "text": `當前數量：${currentQty} 本/套`, "size": "sm", "color": "#059669", "margin": "xs" }
-          ]
-        },
-        // 修正選項 1：改品名
-        {
-          "type": "button",
-          "style": "primary",
-          "color": "#16A34A",
-          "height": "md",
-          "margin": "md",
-          "action": {
-            "type": "message",
-            "label": "📝 修改物品名稱 (打錯字)",
-            "text": CMD_CORRECT_NAME
-          }
-        },
-        // 修正選項 2：改數量
-        {
-          "type": "button",
-          "style": "primary",
-          "color": "#2563EB",
-          "height": "md",
-          "margin": "sm",
-          "action": {
-            "type": "message",
-            "label": "🔢 更正實清數量 (算錯本數)",
-            "text": CMD_CORRECT_QTY
-          }
-        },
-        // 修正選項 3：刪除紀錄
-        {
-          "type": "button",
-          "style": "primary",
-          "color": "#DC2626", // 紅色警示按鈕
-          "height": "md",
-          "margin": "sm",
-          "action": {
-            "type": "message",
-            "label": "🗑️ 刪除剛才這筆紀錄",
-            "text": CMD_DELETE_LAST_LOG
-          }
-        }
-      ]
-    }
-  };
-
-  sendToLine({
-    replyToken: replyToken,
-    messages: [{
-      "type": "flex",
-      "altText": "✏️ 盤點紀錄即時更正",
-      "contents": flexContents
-    }]
-  });
-}
-
-/**
- * 🌟 核心新增：更正成功後發送「小和尚圖片」+「溫馨提示」+「最新卡片」
- */
-function replyCorrectionSuccessWithMonk(replyToken, userName, fullChineseLocation, cellCode, itemName, qty, boxName, customTip) {
-  const currentBoxLabel = boxName ? (boxName.includes('-') ? boxName.split('-')[1].split('(')[0] : boxName.split('(')[0]) : "同櫃子";
-  
-  const flexContents = {
-    "type": "bubble",
-    "header": {
-      "type": "box",
-      "layout": "vertical",
-      "backgroundColor": "#ECFDF5",
-      "contents": [
-        { "type": "text", "text": "✅ 紀錄已成功更正！", "weight": "bold", "size": "xl", "color": "#065F46" },
         { "type": "text", "text": `經手人員：${userName}`, "size": "sm", "color": "#047857", "margin": "xs" }
       ]
     },
@@ -1762,7 +1559,201 @@ function replyCorrectionSuccessWithMonk(replyToken, userName, fullChineseLocatio
     }
   };
 
-  // 🌟 連續發送：小和尚圖片 + 溫馨文字 + 最新確認卡片
+  sendToLine({
+    replyToken: replyToken,
+    messages: [{
+      "type": "flex",
+      "altText": "✅ 盤點更新成功，請選擇下一步",
+      "contents": flexContents
+    }]
+  });
+}
+
+function replyFlexCorrectionMenu(replyToken, currentItemName, currentQty) {
+  const flexContents = {
+    "type": "bubble",
+    "header": {
+      "type": "box",
+      "layout": "vertical",
+      "backgroundColor": "#FFFBEB",
+      "contents": [
+        { "type": "text", "text": "✏️ 盤點紀錄即時更正", "weight": "bold", "size": "xl", "color": "#B45309" },
+        { "type": "text", "text": "請選擇您要修正的項目：", "size": "sm", "color": "#92400E", "margin": "xs" }
+      ]
+    },
+    "body": {
+      "type": "box",
+      "layout": "vertical",
+      "contents": [
+        {
+          "type": "box",
+          "layout": "vertical",
+          "backgroundColor": "#F9FAFB",
+          "paddingAll": "md",
+          "cornerRadius": "md",
+          "contents": [
+            { "type": "text", "text": `當前物品：${currentItemName}`, "weight": "bold", "size": "sm", "color": "#374151" },
+            { "type": "text", "text": `當前數量：${currentQty} 本/套`, "size": "sm", "color": "#059669", "margin": "xs" }
+          ]
+        },
+        {
+          "type": "button",
+          "style": "primary",
+          "color": "#16A34A",
+          "height": "md",
+          "margin": "md",
+          "action": {
+            "type": "message",
+            "label": "📝 修改物品名稱 (打錯字)",
+            "text": CMD_CORRECT_NAME
+          }
+        },
+        {
+          "type": "button",
+          "style": "primary",
+          "color": "#2563EB",
+          "height": "md",
+          "margin": "sm",
+          "action": {
+            "type": "message",
+            "label": "🔢 更正實清數量 (算錯本數)",
+            "text": CMD_CORRECT_QTY
+          }
+        },
+        {
+          "type": "button",
+          "style": "primary",
+          "color": "#DC2626",
+          "height": "md",
+          "margin": "sm",
+          "action": {
+            "type": "message",
+            "label": "🗑️ 刪除剛才這筆紀錄",
+            "text": CMD_DELETE_LAST_LOG
+          }
+        }
+      ]
+    }
+  };
+
+  sendToLine({
+    replyToken: replyToken,
+    messages: [{
+      "type": "flex",
+      "altText": "✏️ 盤點紀錄即時更正",
+      "contents": flexContents
+    }]
+  });
+}
+
+function replyCorrectionSuccessWithMonk(replyToken, userName, fullChineseLocation, cellCode, itemName, qty, boxName, customTip) {
+  const currentBoxLabel = boxName ? (boxName.includes('-') ? boxName.split('-')[1].split('(')[0] : boxName.split('(')[0]) : "同櫃子";
+  
+  const flexContents = {
+    "type": "bubble",
+    "header": {
+      "type": "box",
+      "layout": "vertical",
+      "backgroundColor": "#ECFDF5",
+      "contents": [
+        { "type": "text", "text": "✅ 紀錄已成功更正！", "weight": "bold", "size": "xl", "color": "#065F46" },
+        { "type": "text", "size": "sm", "color": "#047857", "margin": "xs", "text": `經手人員：${userName}` }
+      ]
+    },
+    "body": {
+      "type": "box",
+      "layout": "vertical",
+      "contents": [
+        {
+          "type": "box",
+          "layout": "vertical",
+          "backgroundColor": "#F9FAFB",
+          "paddingAll": "md",
+          "cornerRadius": "md",
+          "contents": [
+            { "type": "text", "text": `📍 位置：${fullChineseLocation}`, "weight": "bold", "size": "sm", "color": "#374151", "wrap": true },
+            { "type": "text", "text": `代碼：${cellCode}`, "size": "xs", "color": "#9CA3AF", "margin": "xs" },
+            { "type": "text", "text": `📦 物品：${itemName}`, "size": "md", "weight": "bold", "color": "#111827", "margin": "sm" },
+            { "type": "text", "text": `🔢 實清數量：${qty} 本/套`, "size": "sm", "color": "#059669", "margin": "xs" }
+          ]
+        },
+        {
+          "type": "button",
+          "style": "primary",
+          "color": "#F59E0B",
+          "height": "md",
+          "margin": "md",
+          "action": {
+            "type": "message",
+            "label": "✏️ 剛才打錯了？立即更正",
+            "text": CMD_START_CORRECTION
+          }
+        },
+        { "type": "separator", "margin": "lg" },
+        { "type": "text", "text": "下一步您想要：", "weight": "bold", "size": "md", "color": "#111827", "margin": "lg" },
+        
+        {
+          "type": "button",
+          "style": "primary",
+          "color": "#16A34A",
+          "height": "md",
+          "margin": "md",
+          "action": {
+            "type": "message",
+            "label": "📦 同格位盤點下一件物品",
+            "text": CMD_NEXT_SKU_SAME_CELL
+          }
+        },
+        {
+          "type": "button",
+          "style": "primary",
+          "color": "#2563EB",
+          "height": "md",
+          "margin": "sm",
+          "action": {
+            "type": "message",
+            "label": `🚪 盤點 [${currentBoxLabel}] 其他層格`,
+            "text": CMD_CHANGE_SHELF_SAME_BOX
+          }
+        },
+        {
+          "type": "button",
+          "style": "primary",
+          "color": "#0D9488",
+          "height": "md",
+          "margin": "sm",
+          "action": {
+            "type": "message",
+            "label": "🗄️ 盤點此空間其他櫃位",
+            "text": CMD_CHANGE_BOX_SAME_ROOM
+          }
+        },
+        {
+          "type": "button",
+          "style": "secondary",
+          "height": "md",
+          "margin": "sm",
+          "action": {
+            "type": "message",
+            "label": "🏛️ 更換其他據點/空間",
+            "text": CMD_CHANGE_SITE
+          }
+        },
+        {
+          "type": "button",
+          "style": "secondary",
+          "height": "md",
+          "margin": "sm",
+          "action": {
+            "type": "message",
+            "label": "🚪 結束盤點 (回主選單)",
+            "text": CMD_EXIT_STOCKTAKE
+          }
+        }
+      ]
+    }
+  };
+
   sendToLine({
     replyToken: replyToken,
     messages: [
