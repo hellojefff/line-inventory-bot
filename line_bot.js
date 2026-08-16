@@ -1,10 +1,10 @@
 /**
- * 覺風物資管理系統 - 全網最防呆點選版 LINE Bot (模式 1：專注當前格位獨立盤點正式版)
- * 核心特性：
- * 1. 嚴格依據 [儲位格位代碼 + 品項編號] 獨立管理庫存，同一品項可安全分佈於多個儲位
- * 2. 盤點完成支援「即時補救更正（改名/改量/刪除）」與小和尚溫馨提示
- * 3. 結束盤點支援 GitHub finish.png 圖文感謝推播
- * 4. 全流程大字卡片呈現，具備返回與結束無死角出口
+ * 覺風物資管理系統 - 全網最防呆點選版 LINE Bot (盤點說明手冊完整版)
+ * 核心升級：
+ * 1. 支援圖文選單「📖 盤點說明」大字指南卡片
+ * 2. 模式 1：依據 [儲位格位代碼 + 品項編號] 獨立管理庫存
+ * 3. 支援「即時更正（改名/改量/刪除）」與小和尚溫馨提示
+ * 4. 結束盤點支援 GitHub finish.png 圖文感謝推播
  */
 
 // ==================== 全局配置 ====================
@@ -110,6 +110,12 @@ function handleLineMessage(event) {
   // 👤 點擊圖文選單的「身份綁定」
   if (userMessage === '綁定身份') {
     replyTextMessage(replyToken, `💡 溫馨提示：\n${myName} 您好，系統確認您已完成實名活化！\n\n編號：[${myUserId}]\n單位：${myDept}\n職稱：${myTitle}\n\n權限已固化，無需重複綁定。請直接點選下方「📷 開始盤點」開始作業！`);
+    return;
+  }
+
+  // 📖 🌟 核心升級：點擊「盤點說明」時發送大字指南手冊卡片
+  if (userMessage === '盤點說明' || userMessage === '說明' || userMessage.toLowerCase() === 'help') {
+    replyFlexManualCard(replyToken, myName);
     return;
   }
 
@@ -257,7 +263,7 @@ function handleLineMessage(event) {
       replyFlexMenuCard(replyToken, "🚪 選擇盤點層格", `已對齊櫃體：【${selectedBoxStr}】\n請點選具體【層格】：`, shelfItems, `↩️ 返回 [${session.zoneName || "櫃位分區"}]`);
       break;
       
-    // 📍 狀態 4：鎖定具體層格 ➔ 呈現專注當前格位的大字卡片
+    // 📍 狀態 4：鎖定層格 ➔ 呈現專注當前格位的大字卡片
     case 'STATE_CHOOSE_CELL':
       let cellCode = userMessage.toUpperCase().trim();
       
@@ -342,7 +348,7 @@ function handleLineMessage(event) {
       executeCreateSkuAndProceed(replyToken, lineUid, session, userMessage);
       break;
 
-    // 🔢 狀態 6：輸入實清數量並獨立更新該格位庫存 (模式 1 核心)
+    // 🔢 狀態 6：輸入實清數量並獨立更新該格位庫存
     case 'STATE_INPUT_QTY':
       if (userMessage === session.skuId) {
         replyTextMessage(replyToken, `請在對話框中直接輸入本次盤點的【實清數量】數字（例如：5）：`);
@@ -636,9 +642,6 @@ function handleGoBack(replyToken, lineUid, session, userName) {
 
 // ==================== 模式 1：庫存寫入、修正與刪除核心 ====================
 
-/**
- * 🌟 模式 1 核心寫入：依據 [cellCode + skuId] 獨立更新當前格位庫存
- */
 function executeUpdateStockWorkflow(userId, cellCode, skuId, itemName, qty) {
   if (!validateStocktakeRelations(userId, skuId)) {
     return false; 
@@ -646,7 +649,6 @@ function executeUpdateStockWorkflow(userId, cellCode, skuId, itemName, qty) {
   
   const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
   
-  // 1. 寫入歷史日誌表 STOCKTAKE_LOG
   let logSheet = ss.getSheetByName("STOCKTAKE_LOG");
   if (!logSheet) {
     logSheet = ss.insertSheet("STOCKTAKE_LOG");
@@ -655,7 +657,6 @@ function executeUpdateStockWorkflow(userId, cellCode, skuId, itemName, qty) {
   const nextLogId = 'LOG-' + String(logSheet.getLastRow()).padStart(3, '0');
   logSheet.appendRow([nextLogId, new Date(), userId, cellCode, skuId, itemName, qty]);
 
-  // 2. 更新當前庫存表 CURRENT_STOCK
   let stockSheet = ss.getSheetByName("CURRENT_STOCK");
   if (!stockSheet) {
     stockSheet = ss.insertSheet("CURRENT_STOCK");
@@ -669,7 +670,6 @@ function executeUpdateStockWorkflow(userId, cellCode, skuId, itemName, qty) {
   const qtyIdx = stockHeaders.indexOf('現有庫存量');
   let isRecordFound = false;
 
-  // 🌟 嚴格比對：只有「格位代碼」與「品項編號」皆完全相同，才進行數量覆寫
   for (let i = 1; i < stockData.length; i++) {
     if (stockData[i][cellIdx] === cellCode && stockData[i][skuIdx] === skuId) {
       stockSheet.getRange(i + 1, qtyIdx + 1).setValue(qty);
@@ -678,7 +678,6 @@ function executeUpdateStockWorkflow(userId, cellCode, skuId, itemName, qty) {
     }
   }
 
-  // 🌟 若該格位首次存放此物資，新增獨立一列，絕不干擾其他格位的同名物資
   if (!isRecordFound) {
     const targetLocId = cellCode.split('-')[0] + '-' + cellCode.split('-')[1];
     const newRow = new Array(stockHeaders.length).fill("");
@@ -1183,6 +1182,111 @@ function writeDebugLog(contents) {
 
 function replyTextMessage(replyToken, text) {
   sendToLine({ replyToken: replyToken, messages: [{ type: 'text', text: text }] });
+}
+
+/**
+ * 🌟 核心新增：盤點說明大字指南手冊卡片
+ */
+function replyFlexManualCard(replyToken, userName) {
+  const flexContents = {
+    "type": "bubble",
+    "header": {
+      "type": "box",
+      "layout": "vertical",
+      "backgroundColor": "#ECFDF5",
+      "contents": [
+        { "type": "text", "text": "📖 覺風物資盤點操作指南", "weight": "bold", "size": "xl", "color": "#065F46" },
+        { "type": "text", "text": `${userName} 您好，三步驟輕鬆完成盤點：`, "size": "sm", "color": "#047857", "margin": "xs" }
+      ]
+    },
+    "body": {
+      "type": "box",
+      "layout": "vertical",
+      "spacing": "md",
+      "contents": [
+        // 步驟 1
+        {
+          "type": "box",
+          "layout": "vertical",
+          "backgroundColor": "#F0FDF4",
+          "borderColor": "#16A34A",
+          "borderWidth": "1px",
+          "cornerRadius": "md",
+          "paddingAll": "md",
+          "contents": [
+            { "type": "text", "text": "第 1 步：定位所在格位", "weight": "bold", "size": "md", "color": "#15803D" },
+            { "type": "text", "text": "點選 據點 ➔ 樓層 ➔ 空間 ➔ 櫃子 ➔ 具體層格。", "size": "sm", "color": "#4B5563", "margin": "xs", "wrap": true }
+          ]
+        },
+        // 步驟 2
+        {
+          "type": "box",
+          "layout": "vertical",
+          "backgroundColor": "#F0FDF4",
+          "borderColor": "#16A34A",
+          "borderWidth": "1px",
+          "cornerRadius": "md",
+          "paddingAll": "md",
+          "contents": [
+            { "type": "text", "text": "第 2 步：搜尋或建立物品", "weight": "bold", "size": "md", "color": "#15803D" },
+            { "type": "text", "text": "在對話框直接打入【書名或用品名稱】進行比對。若為全新物品，點擊按鈕即可一鍵建檔。", "size": "sm", "color": "#4B5563", "margin": "xs", "wrap": true }
+          ]
+        },
+        // 步驟 3
+        {
+          "type": "box",
+          "layout": "vertical",
+          "backgroundColor": "#F0FDF4",
+          "borderColor": "#16A34A",
+          "borderWidth": "1px",
+          "cornerRadius": "md",
+          "paddingAll": "md",
+          "contents": [
+            { "type": "text", "text": "第 3 步：輸入實清數量", "weight": "bold", "size": "md", "color": "#15803D" },
+            { "type": "text", "text": "輸入眼前看到的實際數量（如：5），系統即刻更新該格位庫存！", "size": "sm", "color": "#4B5563", "margin": "xs", "wrap": true }
+          ]
+        },
+        // 溫馨貼士
+        {
+          "type": "box",
+          "layout": "vertical",
+          "backgroundColor": "#FFFBEB",
+          "cornerRadius": "md",
+          "paddingAll": "md",
+          "contents": [
+            { "type": "text", "text": "💡 貼心小提醒：", "weight": "bold", "size": "sm", "color": "#B45309" },
+            { "type": "text", "text": "• 若打錯字或數量，點擊「✏️ 立即更正」可隨時修改。\n• 任何步驟皆可按「↩️ 返回」或「🚪 結束盤點」。", "size": "xs", "color": "#92400E", "margin": "xs", "wrap": true }
+          ]
+        }
+      ]
+    },
+    "footer": {
+      "type": "box",
+      "layout": "vertical",
+      "contents": [
+        {
+          "type": "button",
+          "style": "primary",
+          "color": "#16A34A",
+          "height": "md",
+          "action": {
+            "type": "message",
+            "label": "📷 立即開始盤點",
+            "text": "開始盤點"
+          }
+        }
+      ]
+    }
+  };
+
+  sendToLine({
+    replyToken: replyToken,
+    messages: [{
+      "type": "flex",
+      "altText": "📖 覺風物資盤點操作指南",
+      "contents": flexContents
+    }]
+  });
 }
 
 function replyExitStocktakeWithImage(replyToken, userName) {
