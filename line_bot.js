@@ -1,6 +1,6 @@
 /**
- * 覺風物資管理系統 - 全網最防呆點選版 LINE Bot (同櫃換層專用導航版)
- * 核心升級：盤點完成卡片新增「🚪 盤點同櫃子其他層格」按鈕，同櫃連續盤點一鍵切換
+ * 覺風物資管理系統 - 全網最防呆點選版 LINE Bot (全域指令優先攔截修復版)
+ * 核心修復：建立全域指令優先攔截門閥，徹底杜絕 CMD 指令被當作物資名稱搜尋或建檔之 Bug
  */
 
 // ==================== 全局配置 ====================
@@ -8,9 +8,9 @@ const SPREADSHEET_ID = '13J32Ewv0PVL8o6hEoJUCuK2Ur5pBEnHO90tdG7XxtC8';
 const LINE_ACCESS_TOKEN = 'fstqDcGULaFwMfSL2jm1cTFgCo8Qewut0IeKvyHAwfsaL0Qd869L00YFJiHnpU7J1+oNistrv81ZAI4CrV8QeMJl3BXmm13ZEOHDqOoviFCVW17H3ObQdKFAJS54sGGA/4IFoLQUwh41EDRN36bg+wdB04t89/1O/w1cDnyilFU='; 
 const BTN_BACK_PREFIX = '↩️ 返回';
 
-// 連續盤點與建檔指令常數
+// 系統核心控制指令常數
 const CMD_NEXT_SKU_SAME_CELL = 'CMD_NEXT_SKU_SAME_CELL';
-const CMD_CHANGE_SHELF_SAME_BOX = 'CMD_CHANGE_SHELF_SAME_BOX'; // 🌟 核心新增：同櫃換層指令
+const CMD_CHANGE_SHELF_SAME_BOX = 'CMD_CHANGE_SHELF_SAME_BOX';
 const CMD_CHANGE_BOX_SAME_ROOM = 'CMD_CHANGE_BOX_SAME_ROOM';
 const CMD_CHANGE_SITE = 'CMD_CHANGE_SITE';
 const CMD_CREATE_SKU_CONFIRM = 'CMD_CREATE_SKU_CONFIRM';
@@ -98,8 +98,8 @@ function handleLineMessage(event) {
     return;
   }
 
-  // 🚀 關鍵字：開始盤點 ➔ 第一層：選據點 (大按鈕)
-  if (userMessage === '開始盤點' || !cachedState) {
+  // 🚀 關鍵字：開始盤點 或更換據點指令
+  if (userMessage === '開始盤點' || userMessage === CMD_CHANGE_SITE || !cachedState) {
     const sites = getAllSites(); 
     if (sites.length === 0) {
       replyTextMessage(replyToken, `⚠️ 系統後台 LOC_MASTER 尚未設定任何據點，請先聯繫管理員建檔。`);
@@ -114,9 +114,15 @@ function handleLineMessage(event) {
 
   const session = JSON.parse(cachedState);
 
-  // ↩️ 統一動態攔截「返回」指令
+  // 🌟 核心防禦 1：全域優先攔截「返回按鈕」
   if (userMessage.startsWith(BTN_BACK_PREFIX)) {
     handleGoBack(replyToken, lineUid, session, myName);
+    return;
+  }
+
+  // 🌟 核心防禦 2：全域優先攔截「系統操作指令」，絕不流進物資搜尋或文字處理
+  if (isSystemControlCommand(userMessage)) {
+    handleSystemCommand(replyToken, lineUid, session, userMessage, myName);
     return;
   }
   
@@ -258,6 +264,7 @@ function handleLineMessage(event) {
     case 'STATE_INPUT_SKU':
       const skus = findSKU(userMessage);
       
+      // 查無品項：引導選擇「自訂輸入完整品名」或「直接以關鍵字建檔」
       if (skus.length === 0) {
         session.state = 'STATE_CONFIRM_CREATE_SKU';
         session.pendingItemName = userMessage;
@@ -304,11 +311,12 @@ function handleLineMessage(event) {
         return;
       }
 
+      // 若輸入其他文字，當作新的關鍵字重新搜尋
       session.state = 'STATE_INPUT_SKU';
       handleLineMessage(event);
       break;
 
-    // 📝 狀態 5.6：收到完整品項名稱
+    // 📝 狀態 5.6：收到志工輸入的「完整品項名稱」
     case 'STATE_INPUT_FULL_SKU_NAME':
       executeCreateSkuAndProceed(replyToken, lineUid, session, userMessage);
       break;
@@ -343,41 +351,36 @@ function handleLineMessage(event) {
 
     // 🌟 狀態 7：盤點後連續作業導航控制器
     case 'STATE_POST_STOCKTAKE':
-      handlePostStocktakeAction(replyToken, lineUid, session, userMessage, myName);
+      handleSystemCommand(replyToken, lineUid, session, userMessage, myName);
       break;
   }
 }
 
-// ==================== 輔助：品項建立並轉入數量輸入流程 ====================
+// ==================== 全域系統指令判斷與分流控制器 ====================
 
-function executeCreateSkuAndProceed(replyToken, lineUid, session, itemName) {
-  const cache = CacheService.getUserCache();
-  const createResult = createAndGetNewSKU(itemName);
-
-  if (!createResult.success) {
-    replyTextMessage(replyToken, `❌ 建立失敗：${createResult.message}`);
-    return;
-  }
-
-  session.state = 'STATE_INPUT_QTY';
-  session.skuId = createResult.skuId;
-  session.itemName = createResult.itemName;
-  session.cateName = createResult.cateName;
-  cache.put(lineUid, JSON.stringify(session), 1200);
-
-  const tipMsg = createResult.isExisting 
-    ? `⚠️ 提示：系統已存在完全同名品項【${createResult.itemName}】(編號: ${createResult.skuId})，已自動為您載入！` 
-    : `🎉 新品項建檔成功！\n名稱：${createResult.itemName}\n編號：${createResult.skuId}`;
-
-  replyTextMessage(replyToken, `${tipMsg}\n\n請在對話框中直接輸入本次盤點的【實清數量】數字（例如：5）：`);
+/**
+ * 檢查輸入是否為系統控制指令
+ */
+function isSystemControlCommand(msg) {
+  const commands = [
+    CMD_NEXT_SKU_SAME_CELL,
+    CMD_CHANGE_SHELF_SAME_BOX,
+    CMD_CHANGE_BOX_SAME_ROOM,
+    CMD_CHANGE_SITE,
+    CMD_CREATE_SKU_CONFIRM,
+    CMD_INPUT_DETAILED_SKU,
+    CMD_RETRY_SEARCH_SKU
+  ];
+  return commands.includes(msg);
 }
 
-// ==================== 連續盤點分流與同櫃換層控制器 ====================
-
-function handlePostStocktakeAction(replyToken, lineUid, session, userMessage, userName) {
+/**
+ * 集中處理所有系統控制指令，確保不污染資料庫與搜尋
+ */
+function handleSystemCommand(replyToken, lineUid, session, userMessage, userName) {
   const cache = CacheService.getUserCache();
 
-  // 1. 同格位下一件
+  // 1. 同格位盤下一件
   if (userMessage === CMD_NEXT_SKU_SAME_CELL) {
     session.state = 'STATE_INPUT_SKU';
     cache.put(lineUid, JSON.stringify(session), 1800);
@@ -385,7 +388,7 @@ function handlePostStocktakeAction(replyToken, lineUid, session, userMessage, us
     return;
   }
 
-  // 🌟 2. 核心新增：同櫃子換其他層格 (例如回第7櫃選其他分層)
+  // 2. 同櫃換其他層格
   if (userMessage === CMD_CHANGE_SHELF_SAME_BOX) {
     const shelves = parseShelvesFromBox(session.zoneId || "", session.boxId || "");
     if (shelves.length === 0) {
@@ -414,8 +417,8 @@ function handlePostStocktakeAction(replyToken, lineUid, session, userMessage, us
     return;
   }
 
-  // 4. 更換其他據點/空間
-  if (userMessage === CMD_CHANGE_SITE || userMessage === '開始盤點') {
+  // 4. 更換其他據點/空間 (一鍵返回據點大選單)
+  if (userMessage === CMD_CHANGE_SITE) {
     const sites = getAllSites();
     session.state = 'STATE_CHOOSE_SITE';
     cache.put(lineUid, JSON.stringify(session), 1800);
@@ -424,29 +427,64 @@ function handlePostStocktakeAction(replyToken, lineUid, session, userMessage, us
     return;
   }
 
-  const skus = findSKU(userMessage);
-  if (skus.length > 0) {
-    session.state = 'STATE_INPUT_SKU';
-    cache.put(lineUid, JSON.stringify(session), 1800);
-    if (skus.length > 1) {
-      replyFlexSkuVerticalList(replyToken, skus.slice(0, 6));
-    } else {
-      const targetSku = skus[0];
-      session.state = 'STATE_INPUT_QTY';
-      session.skuId = targetSku['品項編號'] ? targetSku['品項編號'].toString() : "未知";
-      session.itemName = targetSku['物品名稱'] ? targetSku['物品名稱'].toString() : "未知名稱";
-      const cateName = targetSku['大類'] ? targetSku['大類'].toString() : "一般物資"; 
-      cache.put(lineUid, JSON.stringify(session), 1800);
-      replyFlexSkuCard(replyToken, session.itemName, session.skuId, cateName);
-    }
+  // 5. 建檔確認指令
+  if (userMessage === CMD_CREATE_SKU_CONFIRM) {
+    const newItemName = session.pendingItemName || "新品項";
+    executeCreateSkuAndProceed(replyToken, lineUid, session, newItemName);
     return;
   }
 
-  session.state = 'STATE_CONFIRM_CREATE_SKU';
-  session.pendingItemName = userMessage;
-  cache.put(lineUid, JSON.stringify(session), 1200);
-  replyFlexCreateSkuCard(replyToken, userMessage);
+  // 6. 自訂輸入完整品名指令
+  if (userMessage === CMD_INPUT_DETAILED_SKU) {
+    session.state = 'STATE_INPUT_FULL_SKU_NAME';
+    cache.put(lineUid, JSON.stringify(session), 1200);
+    replyTextMessage(replyToken, `✏️ 請在對話框中直接輸入【完整品項名稱與規格】：\n(例如：舒潔三層抽取式衛生紙 100抽)`);
+    return;
+  }
+
+  // 7. 重新搜尋關鍵字指令
+  if (userMessage === CMD_RETRY_SEARCH_SKU) {
+    session.state = 'STATE_INPUT_SKU';
+    cache.put(lineUid, JSON.stringify(session), 1200);
+    replyTextMessage(replyToken, `請重新「輸入物品名稱關鍵字」或開啟相機掃描條碼：`);
+    return;
+  }
 }
+
+// ==================== 輔助：品項建立並轉入數量輸入流程 ====================
+
+function executeCreateSkuAndProceed(replyToken, lineUid, session, itemName) {
+  const cache = CacheService.getUserCache();
+
+  // 🛡️ 嚴格防呆：禁止將系統指令字串當作品名寫入
+  if (isSystemControlCommand(itemName) || itemName.startsWith('CMD_')) {
+    session.state = 'STATE_INPUT_SKU';
+    cache.put(lineUid, JSON.stringify(session), 1200);
+    replyTextMessage(replyToken, `⚠️ 輸入無效，請直接輸入物資的真實名稱（例如：免洗紙盤）：`);
+    return;
+  }
+
+  const createResult = createAndGetNewSKU(itemName);
+
+  if (!createResult.success) {
+    replyTextMessage(replyToken, `❌ 建立失敗：${createResult.message}`);
+    return;
+  }
+
+  session.state = 'STATE_INPUT_QTY';
+  session.skuId = createResult.skuId;
+  session.itemName = createResult.itemName;
+  session.cateName = createResult.cateName;
+  cache.put(lineUid, JSON.stringify(session), 1200);
+
+  const tipMsg = createResult.isExisting 
+    ? `⚠️ 提示：系統已存在完全同名品項【${createResult.itemName}】(編號: ${createResult.skuId})，已自動為您載入！` 
+    : `🎉 新品項建檔成功！\n名稱：${createResult.itemName}\n編號：${createResult.skuId}`;
+
+  replyTextMessage(replyToken, `${tipMsg}\n\n請在對話框中直接輸入本次盤點的【實清數量】數字（例如：5）：`);
+}
+
+// ==================== 返回按鈕倒退控制器 ====================
 
 function handleGoBack(replyToken, lineUid, session, userName) {
   const cache = CacheService.getUserCache();
@@ -1114,9 +1152,6 @@ function replyFlexCreateSkuCard(replyToken, inputKeyword) {
   });
 }
 
-/**
- * 🌟 核心升級：盤點完成卡片新增「🚪 盤點 [同櫃] 其他層格」按鈕
- */
 function replyFlexPostStocktakeCard(replyToken, userName, fullChineseLocation, cellCode, itemName, qty, boxName) {
   const currentBoxLabel = boxName || "同櫃子";
   
@@ -1151,7 +1186,6 @@ function replyFlexPostStocktakeCard(replyToken, userName, fullChineseLocation, c
         { "type": "separator", "margin": "lg" },
         { "type": "text", "text": "下一步您想要：", "weight": "bold", "size": "md", "color": "#111827", "margin": "lg" },
         
-        // 按鈕 1：同格位盤點下一件物品
         {
           "type": "button",
           "style": "primary",
@@ -1164,11 +1198,10 @@ function replyFlexPostStocktakeCard(replyToken, userName, fullChineseLocation, c
             "text": CMD_NEXT_SKU_SAME_CELL
           }
         },
-        // 🌟 按鈕 2（核心升級）：同櫃換其他層格
         {
           "type": "button",
           "style": "primary",
-          "color": "#2563EB", // 醒目藍色大按鈕
+          "color": "#2563EB",
           "height": "md",
           "margin": "sm",
           "action": {
@@ -1177,7 +1210,6 @@ function replyFlexPostStocktakeCard(replyToken, userName, fullChineseLocation, c
             "text": CMD_CHANGE_SHELF_SAME_BOX
           }
         },
-        // 按鈕 3：同空間換其他櫃位
         {
           "type": "button",
           "style": "primary",
@@ -1190,7 +1222,6 @@ function replyFlexPostStocktakeCard(replyToken, userName, fullChineseLocation, c
             "text": CMD_CHANGE_BOX_SAME_ROOM
           }
         },
-        // 按鈕 4：更換其他據點/空間
         {
           "type": "button",
           "style": "secondary",
