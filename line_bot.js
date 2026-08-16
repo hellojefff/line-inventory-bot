@@ -1,6 +1,6 @@
 /**
- * 覺風物資管理系統 - 全網最防呆點選版 LINE Bot (長輩直覺純中文導航版)
- * 核心升級：全面消除冷冰冰英數代碼，所有按鈕與返回鍵一律呈現純中文實體名稱
+ * 覺風物資管理系統 - 全網最防呆點選版 LINE Bot (支援新品項同名比對與自動建檔版)
+ * 核心升級：查無品項時提供大按鈕建立新物資、同名重複檢核、自動產生編號並接續盤點
  */
 
 // ==================== 全局配置 ====================
@@ -8,10 +8,12 @@ const SPREADSHEET_ID = '13J32Ewv0PVL8o6hEoJUCuK2Ur5pBEnHO90tdG7XxtC8';
 const LINE_ACCESS_TOKEN = 'fstqDcGULaFwMfSL2jm1cTFgCo8Qewut0IeKvyHAwfsaL0Qd869L00YFJiHnpU7J1+oNistrv81ZAI4CrV8QeMJl3BXmm13ZEOHDqOoviFCVW17H3ObQdKFAJS54sGGA/4IFoLQUwh41EDRN36bg+wdB04t89/1O/w1cDnyilFU='; 
 const BTN_BACK_PREFIX = '↩️ 返回';
 
-// 連續盤點指令常數
+// 連續盤點與建檔指令常數
 const CMD_NEXT_SKU_SAME_CELL = 'CMD_NEXT_SKU_SAME_CELL';
 const CMD_CHANGE_BOX_SAME_ROOM = 'CMD_CHANGE_BOX_SAME_ROOM';
 const CMD_CHANGE_SITE = 'CMD_CHANGE_SITE';
+const CMD_CREATE_SKU_CONFIRM = 'CMD_CREATE_SKU_CONFIRM';
+const CMD_RETRY_SEARCH_SKU = 'CMD_RETRY_SEARCH_SKU';
 
 // ==================== Webhook 進入點 ====================
 function doPost(e) {
@@ -162,7 +164,6 @@ function handleLineMessage(event) {
       const locId = userMessage.toUpperCase();
       const zones = getZonesByLocation(locId); 
       
-      // 依據 locId 反查該空間的中文名稱並寫入 Session
       const currentLocInfo = getLocationInfoById(locId);
       const spaceName = currentLocInfo ? currentLocInfo.space_name : locId;
       
@@ -175,7 +176,7 @@ function handleLineMessage(event) {
       
       session.state = 'STATE_CHOOSE_ZONE';
       session.locId = locId;
-      session.spaceName = spaceName; // 🌟 儲存純中文空間名稱
+      session.spaceName = spaceName;
       cache.put(lineUid, JSON.stringify(session), 1200);
       
       const zoneItems = zones.map(z => ({ title: z.zone_name, desc: `${spaceName} - ${z.zone_name}`, value: z.zone_id }));
@@ -186,8 +187,6 @@ function handleLineMessage(event) {
     case 'STATE_CHOOSE_ZONE':
       const zoneId = userMessage.toUpperCase();
       const boxes = parseBoxesFromZone(zoneId); 
-      
-      // 依據 zoneId 取得中文分區名稱
       const zoneName = getZoneNameById(zoneId);
       
       if (boxes.length === 0) {
@@ -199,7 +198,7 @@ function handleLineMessage(event) {
       
       session.state = 'STATE_CHOOSE_BOX';
       session.zoneId = zoneId;
-      session.zoneName = zoneName; // 🌟 儲存純中文分區名稱
+      session.zoneName = zoneName;
       cache.put(lineUid, JSON.stringify(session), 1200); 
       
       const boxItems = boxes.map(b => ({ title: b.display_label, desc: `點擊進入 ${b.display_label}`, value: b.display_label }));
@@ -221,7 +220,7 @@ function handleLineMessage(event) {
       
       session.state = 'STATE_CHOOSE_CELL';
       session.boxId = selectedBoxId;
-      session.boxName = selectedBoxStr; // 🌟 儲存純中文櫃名
+      session.boxName = selectedBoxStr;
       cache.put(lineUid, JSON.stringify(session), 1200);
       
       const shelfItems = shelves.map(s => ({ title: `📍 ${s.name}`, desc: `格位：${s.short_code}`, value: s.cell_code }));
@@ -247,18 +246,23 @@ function handleLineMessage(event) {
       
       session.state = 'STATE_INPUT_SKU';
       session.cellCode = cellCode;
-      session.shelfName = matchedShelf.name; // 🌟 儲存層格中文名稱
+      session.shelfName = matchedShelf.name;
       cache.put(lineUid, JSON.stringify(session), 1200);
       
       replyTextMessage(replyToken, `📍 已定位格位：\n【${session.spaceName} - ${session.boxName} - ${matchedShelf.name}】\n(${cellCode})\n\n請開啟相機「掃描物品條碼」，或直接「輸入物品名稱關鍵字」進行搜尋：`);
       break;
       
-    // 📦 狀態 5：搜尋物資 (SKU)
+    // 📦 狀態 5：搜尋物資 (SKU) ➔ 🌟 查無品項時引導「建立新品項」
     case 'STATE_INPUT_SKU':
       const skus = findSKU(userMessage);
       
+      // 💡 查無品項：引導建立新品項或重試
       if (skus.length === 0) {
-        replyTextMessage(replyToken, `🔍 找不到與 "${userMessage}" 相關的物資，請重新輸入關鍵字。`);
+        session.state = 'STATE_CONFIRM_CREATE_SKU';
+        session.pendingItemName = userMessage; // 暫存欲新增的品項名稱
+        cache.put(lineUid, JSON.stringify(session), 1200);
+
+        replyFlexCreateSkuCard(replyToken, userMessage);
         return;
       }
       
@@ -276,6 +280,42 @@ function handleLineMessage(event) {
       
       replyFlexSkuCard(replyToken, session.itemName, session.skuId, cateName);
       break;  
+
+    // ➕ 狀態 5.5：確認建立新品項流程
+    case 'STATE_CONFIRM_CREATE_SKU':
+      if (userMessage === CMD_CREATE_SKU_CONFIRM) {
+        const newItemName = session.pendingItemName;
+        // 執行查重與自動建檔
+        const createResult = createAndGetNewSKU(newItemName);
+
+        if (!createResult.success) {
+          replyTextMessage(replyToken, `❌ 建立失敗：${createResult.message}`);
+          return;
+        }
+
+        // 成功建立或找到既有同名品項，直接進入數量輸入流程
+        session.state = 'STATE_INPUT_QTY';
+        session.skuId = createResult.skuId;
+        session.itemName = createResult.itemName;
+        session.cateName = createResult.cateName;
+        cache.put(lineUid, JSON.stringify(session), 1200);
+
+        const tipMsg = createResult.isExisting ? `⚠️ 提示：系統已存在相同品項【${createResult.itemName}】(編號: ${createResult.skuId})，已為您自動載入！` : `🎉 新品項建檔成功！\n名稱：${createResult.itemName}\n編號：${createResult.skuId}`;
+        replyTextMessage(replyToken, `${tipMsg}\n\n請在對話框中直接輸入本次盤點的【實清數量】數字（例如：5）：`);
+        return;
+      }
+
+      if (userMessage === CMD_RETRY_SEARCH_SKU) {
+        session.state = 'STATE_INPUT_SKU';
+        cache.put(lineUid, JSON.stringify(session), 1200);
+        replyTextMessage(replyToken, `請重新「輸入物品名稱關鍵字」或開啟相機掃描條碼：`);
+        return;
+      }
+
+      // 若志工直接輸入新的關鍵字，重回搜尋
+      session.state = 'STATE_INPUT_SKU';
+      handleLineMessage(event);
+      break;
 
     // 🔢 狀態 6：輸入數量
     case 'STATE_INPUT_QTY':
@@ -364,14 +404,17 @@ function handlePostStocktakeAction(replyToken, lineUid, session, userMessage, us
     return;
   }
 
-  replyTextMessage(replyToken, "請點選上方按鈕選擇「同格位繼續」、「換同空間其他櫃」或「換據點」。");
+  // 查無品項：引導建立
+  session.state = 'STATE_CONFIRM_CREATE_SKU';
+  session.pendingItemName = userMessage;
+  cache.put(lineUid, JSON.stringify(session), 1200);
+  replyFlexCreateSkuCard(replyToken, userMessage);
 }
 
 function handleGoBack(replyToken, lineUid, session, userName) {
   const cache = CacheService.getUserCache();
 
   switch (session.state) {
-    // 在選樓層按返回 ➔ 回到選據點
     case 'STATE_CHOOSE_FLOOR':
       const sites = getAllSites();
       session.state = 'STATE_CHOOSE_SITE';
@@ -380,7 +423,6 @@ function handleGoBack(replyToken, lineUid, session, userName) {
       replyFlexMenuCard(replyToken, "↩️ 已返回據點選單", "請重新選擇【據點】：", siteItems, null);
       break;
 
-    // 在選空間按返回 ➔ 回到選樓層
     case 'STATE_CHOOSE_LOC':
       const floors = getFloorsBySite(session.siteName || "");
       session.state = 'STATE_CHOOSE_FLOOR';
@@ -389,7 +431,6 @@ function handleGoBack(replyToken, lineUid, session, userName) {
       replyFlexMenuCard(replyToken, "↩️ 已返回樓層選單", `請重新選擇【${session.siteName}】的樓層：`, floorItems, `↩️ 返回 [選擇據點]`);
       break;
 
-    // 在選櫃位分區按返回 ➔ 回到選空間
     case 'STATE_CHOOSE_ZONE':
       const details = getDetailsBySiteAndFloor(session.siteName || "", session.floorName || "");
       session.state = 'STATE_CHOOSE_LOC';
@@ -398,7 +439,6 @@ function handleGoBack(replyToken, lineUid, session, userName) {
       replyFlexMenuCard(replyToken, "↩️ 已返回空間選單", "請重新選擇【空間/展示區】：", spaceItems, `↩️ 返回 [${session.siteName} 樓層]`);
       break;
 
-    // 在選櫃子按返回 ➔ 回到選櫃位分區
     case 'STATE_CHOOSE_BOX':
       const zones = getZonesByLocation(session.locId || "");
       session.state = 'STATE_CHOOSE_ZONE';
@@ -407,7 +447,6 @@ function handleGoBack(replyToken, lineUid, session, userName) {
       replyFlexMenuCard(replyToken, "↩️ 已返回櫃位選單", `請重新選擇【${session.spaceName || "空間"}】的櫃位區域：`, zoneItems, `↩️ 返回 [${session.floorName || "空間清單"}]`);
       break;
 
-    // 在選層格按返回 ➔ 回到選櫃子
     case 'STATE_CHOOSE_CELL':
       const boxes = parseBoxesFromZone(session.zoneId || "");
       session.state = 'STATE_CHOOSE_BOX';
@@ -426,7 +465,71 @@ function handleGoBack(replyToken, lineUid, session, userName) {
   }
 }
 
-// ==================== 資料庫讀取與輔助反查核心 ====================
+// ==================== 資料庫讀取與新品項查重建檔核心 ====================
+
+/**
+ * 🌟 核心新增：新品項查重檢核與自動建檔
+ * @param {string} itemName - 欲建立的品項名稱
+ * @returns {object} { success: boolean, skuId: string, itemName: string, cateName: string, isExisting: boolean, message: string }
+ */
+function createAndGetNewSKU(itemName) {
+  const cleanName = itemName.trim();
+  if (!cleanName) {
+    return { success: false, message: "品項名稱不得為空" };
+  }
+
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const sheet = ss.getSheetByName("SKU_MASTER");
+  if (!sheet) {
+    return { success: false, message: "找不到 SKU_MASTER 資料表" };
+  }
+
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0];
+  const skuIdIdx = headers.indexOf('品項編號');
+  const itemNameIdx = headers.indexOf('物品名稱');
+  const cateIdx = headers.indexOf('大類');
+
+  if (skuIdIdx === -1 || itemNameIdx === -1) {
+    return { success: false, message: "SKU_MASTER 缺少必要欄位" };
+  }
+
+  // 1. 同名重複檢核 (不分大小寫、去除所有空格比對)
+  const normalizedTarget = cleanName.replace(/\s+/g, "").toLowerCase();
+  for (let i = 1; i < data.length; i++) {
+    const existingName = data[i][itemNameIdx] ? data[i][itemNameIdx].toString().replace(/\s+/g, "").toLowerCase() : "";
+    if (existingName === normalizedTarget) {
+      // 找到完全同名的品項，直接返回既有資料，防止重複建立
+      return {
+        success: true,
+        skuId: data[i][skuIdIdx].toString(),
+        itemName: data[i][itemNameIdx].toString(),
+        cateName: (cateIdx !== -1 && data[i][cateIdx]) ? data[i][cateIdx].toString() : "一般物資",
+        isExisting: true
+      };
+    }
+  }
+
+  // 2. 自動生成全新流水號 SKU ID (例如自動產生 SKU-001 或接續流水號)
+  const newSkuId = 'SKU-' + String(data.length).padStart(3, '0');
+  const defaultCate = "一般物資";
+
+  // 3. 建立新資料行並追加寫入
+  const newRow = new Array(headers.length).fill("");
+  newRow[skuIdIdx] = newSkuId;
+  newRow[itemNameIdx] = cleanName;
+  if (cateIdx !== -1) newRow[cateIdx] = defaultCate;
+
+  sheet.appendRow(newRow);
+
+  return {
+    success: true,
+    skuId: newSkuId,
+    itemName: cleanName,
+    cateName: defaultCate,
+    isExisting: false
+  };
+}
 
 function getAllSites() {
   const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
@@ -506,9 +609,6 @@ function getDetailsBySiteAndFloor(siteName, floorName) {
   return details;
 }
 
-/**
- * 依據場域編碼反查中文空間名稱
- */
 function getLocationInfoById(locId) {
   const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
   const sheet = ss.getSheetByName("LOC_MASTER");
@@ -555,9 +655,6 @@ function getZonesByLocation(locId) {
   return zones;
 }
 
-/**
- * 依據分區編碼反查中文分區名稱
- */
 function getZoneNameById(zoneId) {
   const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
   const sheet = ss.getSheetByName("SUB_ZONE_DETAIL");
@@ -905,6 +1002,75 @@ function replyFlexMenuCard(replyToken, title, subtitle, items, backBtnLabel = nu
     messages: [{
       "type": "flex",
       "altText": title,
+      "contents": flexContents
+    }]
+  });
+}
+
+/**
+ * 🌟 核心新增：查無品項時，跳出「建立新品項」大字確認卡片
+ */
+function replyFlexCreateSkuCard(replyToken, inputKeyword) {
+  const flexContents = {
+    "type": "bubble",
+    "header": {
+      "type": "box",
+      "layout": "vertical",
+      "backgroundColor": "#FFFBEB",
+      "contents": [
+        { "type": "text", "text": "🔍 查無此品項", "weight": "bold", "size": "xl", "color": "#B45309" },
+        { "type": "text", "text": "系統主檔中尚未建檔此物資", "size": "sm", "color": "#92400E", "margin": "xs" }
+      ]
+    },
+    "body": {
+      "type": "box",
+      "layout": "vertical",
+      "contents": [
+        { "type": "text", "text": "您剛才輸入的名稱為：", "size": "sm", "color": "#6B7280" },
+        {
+          "type": "box",
+          "layout": "vertical",
+          "backgroundColor": "#F3F4F6",
+          "paddingAll": "lg",
+          "cornerRadius": "md",
+          "margin": "sm",
+          "contents": [
+            { "type": "text", "text": `【${inputKeyword}】`, "weight": "bold", "size": "lg", "color": "#111827", "wrap": true }
+          ]
+        },
+        { "type": "text", "text": "您是否要將此物資直接新增至系統並進行盤點？", "size": "sm", "color": "#374151", "margin": "md", "wrap": true },
+        {
+          "type": "button",
+          "style": "primary",
+          "color": "#16A34A",
+          "height": "md",
+          "margin": "lg",
+          "action": {
+            "type": "message",
+            "label": "➕ 建立此新品項並盤點",
+            "text": CMD_CREATE_SKU_CONFIRM
+          }
+        },
+        {
+          "type": "button",
+          "style": "secondary",
+          "height": "md",
+          "margin": "sm",
+          "action": {
+            "type": "message",
+            "label": "🔍 重新輸入關鍵字",
+            "text": CMD_RETRY_SEARCH_SKU
+          }
+        }
+      ]
+    }
+  };
+
+  sendToLine({
+    replyToken: replyToken,
+    messages: [{
+      "type": "flex",
+      "altText": "🔍 查無品項，是否建立新品項？",
       "contents": flexContents
     }]
   });
