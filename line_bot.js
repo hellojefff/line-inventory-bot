@@ -1,12 +1,12 @@
 /**
- * 覺風物資管理系統 - 全網最防呆點選版 LINE Bot (連續盤點情境優化版)
- * 核心升級：盤點成功後提供「同格下一件 / 同空間換櫃 / 換新據點」三大情境導航
+ * 覺風物資管理系統 - 全網最防呆點選版 LINE Bot (動態具名返回按鈕版)
+ * 核心升級：將「回上一層」動態命名為具體空間/櫃名 (如「↩️ 返回 [大安]」、「↩️ 返回 [B19櫃]」)
  */
 
 // ==================== 全局配置 ====================
 const SPREADSHEET_ID = '13J32Ewv0PVL8o6hEoJUCuK2Ur5pBEnHO90tdG7XxtC8'; 
 const LINE_ACCESS_TOKEN = 'fstqDcGULaFwMfSL2jm1cTFgCo8Qewut0IeKvyHAwfsaL0Qd869L00YFJiHnpU7J1+oNistrv81ZAI4CrV8QeMJl3BXmm13ZEOHDqOoviFCVW17H3ObQdKFAJS54sGGA/4IFoLQUwh41EDRN36bg+wdB04t89/1O/w1cDnyilFU='; 
-const BTN_BACK_TEXT = '↩️ 回上一層';
+const BTN_BACK_PREFIX = '↩️ 返回';
 
 // 連續盤點指令常數
 const CMD_NEXT_SKU_SAME_CELL = 'CMD_NEXT_SKU_SAME_CELL';
@@ -104,14 +104,14 @@ function handleLineMessage(event) {
     cache.put(lineUid, JSON.stringify({ state: 'STATE_CHOOSE_SITE' }), 1200);
     
     const menuItems = sites.map(site => ({ title: site, desc: "點擊進入此據點", value: site }));
-    replyFlexMenuCard(replyToken, "🙏 選擇盤點據點", `${myName} 您好，請點選您所在的【據點】：`, menuItems, false);
+    replyFlexMenuCard(replyToken, "🙏 選擇盤點據點", `${myName} 您好，請點選您所在的【據點】：`, menuItems, null);
     return;
   }
 
   const session = JSON.parse(cachedState);
 
-  // ↩️ 統一攔截「回上一層」指令
-  if (userMessage === BTN_BACK_TEXT) {
+  // ↩️ 統一動態攔截「返回」指令
+  if (userMessage.startsWith(BTN_BACK_PREFIX)) {
     handleGoBack(replyToken, lineUid, session, myName);
     return;
   }
@@ -125,7 +125,7 @@ function handleLineMessage(event) {
       if (floors.length === 0) {
         const sites = getAllSites();
         const menuItems = sites.map(s => ({ title: s, desc: "點擊進入此據點", value: s }));
-        replyFlexMenuCard(replyToken, "⚠️ 查無樓層", `找不到「${selectedSite}」底下的樓層配置，請重新選擇據點：`, menuItems, false);
+        replyFlexMenuCard(replyToken, "⚠️ 查無樓層", `找不到「${selectedSite}」底下的樓層配置，請重新選擇據點：`, menuItems, null);
         return;
       }
       
@@ -134,7 +134,7 @@ function handleLineMessage(event) {
       cache.put(lineUid, JSON.stringify(session), 1200);
       
       const floorItems = floors.map(f => ({ title: f, desc: `${selectedSite} ${f}`, value: f }));
-      replyFlexMenuCard(replyToken, "🏛️ 選擇所在樓層", `已選擇據點：${selectedSite}\n請點選所在【樓層】：`, floorItems, true);
+      replyFlexMenuCard(replyToken, "🏛️ 選擇所在樓層", `已選擇據點：${selectedSite}\n請點選所在【樓層】：`, floorItems, `↩️ 返回 [重選據點]`);
       break;
 
     // 🏢 狀態 0.5：志工點選「樓層」 ➔ 導向選擇「詳細空間」
@@ -145,7 +145,7 @@ function handleLineMessage(event) {
       if (details.length === 0) {
         const floorsInSite = getFloorsBySite(session.siteName || "");
         const floorItems = floorsInSite.map(f => ({ title: f, desc: `${session.siteName} ${f}`, value: f }));
-        replyFlexMenuCard(replyToken, "⚠️ 查無空間", `找不到「${session.siteName} ${selectedFloor}」的空間配置，請重新選擇樓層：`, floorItems, true);
+        replyFlexMenuCard(replyToken, "⚠️ 查無空間", `找不到「${session.siteName} ${selectedFloor}」的空間配置，請重新選擇樓層：`, floorItems, `↩️ 返回 [重選據點]`);
         return;
       }
       
@@ -154,7 +154,7 @@ function handleLineMessage(event) {
       cache.put(lineUid, JSON.stringify(session), 1200);
       
       const spaceItems = details.map(d => ({ title: d.space_name, desc: `場域代碼：${d.loc_id}`, value: d.loc_id }));
-      replyFlexMenuCard(replyToken, "🏢 選擇具體空間", `已選擇：${session.siteName} ${selectedFloor}\n請點選具體【空間/展示區】：`, spaceItems, true);
+      replyFlexMenuCard(replyToken, "🏢 選擇具體空間", `已選擇：${session.siteName} ${selectedFloor}\n請點選具體【空間/展示區】：`, spaceItems, `↩️ 返回 [${session.siteName} 樓層清單]`);
       break;
 
     // 📍 狀態 1：志工點選「詳細空間」 ➔ 導向選擇「櫃位」
@@ -165,7 +165,7 @@ function handleLineMessage(event) {
       if (zones.length === 0) {
         const currentDetails = getDetailsBySiteAndFloor(session.siteName || "", session.floorName || "");
         const spaceItems = currentDetails.map(d => ({ title: d.space_name, desc: `場域代碼：${d.loc_id}`, value: d.loc_id }));
-        replyFlexMenuCard(replyToken, "⚠️ 查無櫃位", `找不到場域 "${userMessage}" 下的櫃位明細。請重新點選：`, spaceItems, true);
+        replyFlexMenuCard(replyToken, "⚠️ 查無櫃位", `找不到場域 "${userMessage}" 下的櫃位明細。請重新點選：`, spaceItems, `↩️ 返回 [${session.siteName} 樓層清單]`);
         return;
       }
       
@@ -174,18 +174,18 @@ function handleLineMessage(event) {
       cache.put(lineUid, JSON.stringify(session), 1200);
       
       const zoneItems = zones.map(z => ({ title: z.zone_name, desc: `編碼：${z.zone_id}`, value: z.zone_id }));
-      replyFlexMenuCard(replyToken, "🗄️ 選擇櫃位區域", `已定位場域：${locId}\n請點選要盤點的【櫃位/區域】：`, zoneItems, true);
+      replyFlexMenuCard(replyToken, "🗄️ 選擇櫃位區域", `已定位場域：${locId}\n請點選要盤點的【櫃位/區域】：`, zoneItems, `↩️ 返回 [${session.floorName || "空間清單"}]`);
       break;
 
     // 🗄️ 狀態 2：志工點選「儲位分區」 ➔ 導向選擇「櫃子」
     case 'STATE_CHOOSE_ZONE':
       const zoneId = userMessage.toUpperCase();
-      const boxes = parseBoxesFromZone(zoneId);
+      const boxes = parseBoxesFromZone(zoneId); 
       
       if (boxes.length === 0) {
         const currentZones = getZonesByLocation(session.locId || "");
         const zoneItems = currentZones.map(z => ({ title: z.zone_name, desc: `編碼：${z.zone_id}`, value: z.zone_id }));
-        replyFlexMenuCard(replyToken, "❌ 查無櫃子", `找不到明細 "${zoneId}" 的空間配置。請重新點選：`, zoneItems, true);
+        replyFlexMenuCard(replyToken, "❌ 查無櫃子", `找不到明細 "${zoneId}" 的空間配置。請重新點選：`, zoneItems, `↩️ 返回 [${session.floorName || "空間清單"}]`);
         return;
       }
       
@@ -194,18 +194,18 @@ function handleLineMessage(event) {
       cache.put(lineUid, JSON.stringify(session), 1200); 
       
       const boxItems = boxes.map(b => ({ title: b.display_label, desc: `櫃位編號：${b.box_id}`, value: b.display_label }));
-      replyFlexMenuCard(replyToken, "🗃️ 選擇盤點櫃子", `已鎖定區域：${zoneId}\n請點選要盤點的【櫃子】：`, boxItems, true);
+      replyFlexMenuCard(replyToken, "🗃️ 選擇盤點櫃子", `已鎖定區域：${zoneId}\n請點選要盤點的【櫃子】：`, boxItems, `↩️ 返回 [${session.locId || "櫃位分區"}]`);
       break;
       
     // 🗃️ 狀態 3：志工點選「櫃子」 ➔ 導向選擇「層格」
     case 'STATE_CHOOSE_BOX':
       const selectedBoxId = userMessage.split('-')[0].toUpperCase().trim();
-      const shelves = parseShelvesFromBox(session.zoneId, selectedBoxId);
+      const shelves = parseShelvesFromBox(session.zoneId, selectedBoxId); 
       
       if (shelves.length === 0) {
         const boxes = parseBoxesFromZone(session.zoneId);
         const boxItems = boxes.map(b => ({ title: b.display_label, desc: `櫃位編號：${b.box_id}`, value: b.display_label }));
-        replyFlexMenuCard(replyToken, "❌ 查無層格", `找不到該櫃子配置，請重新選擇櫃子：`, boxItems, true);
+        replyFlexMenuCard(replyToken, "❌ 查無層格", `找不到該櫃子配置，請重新選擇櫃子：`, boxItems, `↩️ 返回 [${session.locId || "櫃位分區"}]`);
         return;
       }
       
@@ -214,7 +214,7 @@ function handleLineMessage(event) {
       cache.put(lineUid, JSON.stringify(session), 1200);
       
       const shelfItems = shelves.map(s => ({ title: `📍 格位：${s.short_code}`, desc: s.name, value: s.cell_code }));
-      replyFlexMenuCard(replyToken, "🚪 選擇盤點層格", `已對齊櫃體：${selectedBoxId}\n請點選具體【層格】：`, shelfItems, true);
+      replyFlexMenuCard(replyToken, "🚪 選擇盤點層格", `已對齊櫃體：${selectedBoxId}\n請點選具體【層格】：`, shelfItems, `↩️ 返回 [${selectedBoxId} 櫃體清單]`);
       break;
       
     // 📍 狀態 4：點選微細層格 ➔ 導向搜尋物資
@@ -227,7 +227,7 @@ function handleLineMessage(event) {
       if (!isCellValid) {
         if (validShelves.length > 0) {
           const shelfItems = validShelves.map(s => ({ title: `📍 格位：${s.short_code}`, desc: s.name, value: s.cell_code }));
-          replyFlexMenuCard(replyToken, "⚠️ 請重新點選", `未能識別層格，請點選下方大按鈕：`, shelfItems, true);
+          replyFlexMenuCard(replyToken, "⚠️ 請重新點選", `未能識別層格，請點選下方大按鈕：`, shelfItems, `↩️ 返回 [${session.boxId || "層格清單"}]`);
         } else {
           replyTextMessage(replyToken, `❌ 系統狀態中斷，請重新輸入【開始盤點】。`);
         }
@@ -265,7 +265,7 @@ function handleLineMessage(event) {
       replyFlexSkuCard(replyToken, session.itemName, session.skuId, cateName);
       break;  
 
-    // 🔢 狀態 6：輸入數量 ➔ 🌟 盤點成功後進入連續盤點導航
+    // 🔢 狀態 6：輸入數量
     case 'STATE_INPUT_QTY':
       if (userMessage === session.skuId) {
         replyTextMessage(replyToken, `請在對話框中直接輸入本次盤點的【實清數量】數字（例如：5）：`);
@@ -281,35 +281,29 @@ function handleLineMessage(event) {
       const success = executeUpdateStockWorkflow(myUserId, session.cellCode, session.skuId, session.itemName, qty);
       
       if (success) {
-        // 保持快取，切換至「盤點後選擇」狀態
         session.state = 'STATE_POST_STOCKTAKE';
         session.lastItemName = session.itemName;
         session.lastQty = qty;
-        cache.put(lineUid, JSON.stringify(session), 1800); // 延長快取至 30 分鐘
+        cache.put(lineUid, JSON.stringify(session), 1800);
 
-        // 噴出三大情境導航圖卡
         replyFlexPostStocktakeCard(replyToken, myName, session.cellCode, session.itemName, qty);
       } else {
         replyTextMessage(replyToken, `❌ 寫入失敗：資料庫關聯驗證未通過，請檢查人員主檔與品項主檔。`);
       }
       break;
 
-    // 🌟 新增狀態 7：盤點後連續作業導航控制器
+    // 🌟 狀態 7：盤點後連續作業導航控制器
     case 'STATE_POST_STOCKTAKE':
       handlePostStocktakeAction(replyToken, lineUid, session, userMessage, myName);
       break;
   }
 }
 
-// ==================== 盤點完成後連續作業分流器 ====================
+// ==================== 連續盤點分流與動態返回控制器 ====================
 
-/**
- * 處理「同格下一件 / 換同空間其他櫃 / 換新據點空間」三大情境
- */
 function handlePostStocktakeAction(replyToken, lineUid, session, userMessage, userName) {
   const cache = CacheService.getUserCache();
 
-  // 情境 1-A：在同一個層格，盤點下一件物品
   if (userMessage === CMD_NEXT_SKU_SAME_CELL) {
     session.state = 'STATE_INPUT_SKU';
     cache.put(lineUid, JSON.stringify(session), 1800);
@@ -317,7 +311,6 @@ function handlePostStocktakeAction(replyToken, lineUid, session, userMessage, us
     return;
   }
 
-  // 情境 1-B：留在同一個空間（如：小教室），挑選其他櫃位或區域
   if (userMessage === CMD_CHANGE_BOX_SAME_ROOM) {
     const zones = getZonesByLocation(session.locId || "");
     if (zones.length === 0) {
@@ -327,21 +320,19 @@ function handlePostStocktakeAction(replyToken, lineUid, session, userMessage, us
     session.state = 'STATE_CHOOSE_ZONE';
     cache.put(lineUid, JSON.stringify(session), 1800);
     const zoneItems = zones.map(z => ({ title: z.zone_name, desc: `編碼：${z.zone_id}`, value: z.zone_id }));
-    replyFlexMenuCard(replyToken, "🗄️ 選擇同空間其他櫃位", `目前所在空間：${session.locId}\n請點選要盤點的【櫃位/區域】：`, zoneItems, true);
+    replyFlexMenuCard(replyToken, "🗄️ 選擇同空間其他櫃位", `目前所在空間：${session.locId}\n請點選要盤點的【櫃位/區域】：`, zoneItems, `↩️ 返回 [${session.floorName || "空間清單"}]`);
     return;
   }
 
-  // 情境 2：更換到其他據點或空間（重新從據點選起）
   if (userMessage === CMD_CHANGE_SITE || userMessage === '開始盤點') {
     const sites = getAllSites();
     session.state = 'STATE_CHOOSE_SITE';
     cache.put(lineUid, JSON.stringify(session), 1800);
     const siteItems = sites.map(s => ({ title: s, desc: "點擊進入此據點", value: s }));
-    replyFlexMenuCard(replyToken, "🙏 選擇新盤點據點", `${userName} 您好，請點選您要前往的【據點】：`, siteItems, false);
+    replyFlexMenuCard(replyToken, "🙏 選擇新盤點據點", `${userName} 您好，請點選您要前往的【據點】：`, siteItems, null);
     return;
   }
 
-  // 防呆：如果志工直接輸入關鍵字搜尋物資，自動認定為「同格位搜尋」
   const skus = findSKU(userMessage);
   if (skus.length > 0) {
     session.state = 'STATE_INPUT_SKU';
@@ -363,8 +354,6 @@ function handlePostStocktakeAction(replyToken, lineUid, session, userMessage, us
   replyTextMessage(replyToken, "請點選上方按鈕選擇「同格位繼續」、「換同空間其他櫃」或「換據點」。");
 }
 
-// ==================== 「回上一層」狀態倒退控制器 ====================
-
 function handleGoBack(replyToken, lineUid, session, userName) {
   const cache = CacheService.getUserCache();
 
@@ -374,7 +363,7 @@ function handleGoBack(replyToken, lineUid, session, userName) {
       session.state = 'STATE_CHOOSE_SITE';
       cache.put(lineUid, JSON.stringify(session), 1200);
       const siteItems = sites.map(s => ({ title: s, desc: "點擊進入此據點", value: s }));
-      replyFlexMenuCard(replyToken, "↩️ 已返回據點選單", "請重新選擇【據點】：", siteItems, false);
+      replyFlexMenuCard(replyToken, "↩️ 已返回據點選單", "請重新選擇【據點】：", siteItems, null);
       break;
 
     case 'STATE_CHOOSE_LOC':
@@ -382,7 +371,7 @@ function handleGoBack(replyToken, lineUid, session, userName) {
       session.state = 'STATE_CHOOSE_FLOOR';
       cache.put(lineUid, JSON.stringify(session), 1200);
       const floorItems = floors.map(f => ({ title: f, desc: `${session.siteName} ${f}`, value: f }));
-      replyFlexMenuCard(replyToken, "↩️ 已返回樓層選單", `請重新選擇【${session.siteName}】的樓層：`, floorItems, true);
+      replyFlexMenuCard(replyToken, "↩️ 已返回樓層選單", `請重新選擇【${session.siteName}】的樓層：`, floorItems, `↩️ 返回 [重選據點]`);
       break;
 
     case 'STATE_CHOOSE_ZONE':
@@ -390,7 +379,7 @@ function handleGoBack(replyToken, lineUid, session, userName) {
       session.state = 'STATE_CHOOSE_LOC';
       cache.put(lineUid, JSON.stringify(session), 1200);
       const spaceItems = details.map(d => ({ title: d.space_name, desc: `場域代碼：${d.loc_id}`, value: d.loc_id }));
-      replyFlexMenuCard(replyToken, "↩️ 已返回空間選單", "請重新選擇【空間/展示區】：", spaceItems, true);
+      replyFlexMenuCard(replyToken, "↩️ 已返回空間選單", "請重新選擇【空間/展示區】：", spaceItems, `↩️ 返回 [${session.siteName} 樓層清單]`);
       break;
 
     case 'STATE_CHOOSE_BOX':
@@ -398,7 +387,7 @@ function handleGoBack(replyToken, lineUid, session, userName) {
       session.state = 'STATE_CHOOSE_ZONE';
       cache.put(lineUid, JSON.stringify(session), 1200);
       const zoneItems = zones.map(z => ({ title: z.zone_name, desc: `編碼：${z.zone_id}`, value: z.zone_id }));
-      replyFlexMenuCard(replyToken, "↩️ 已返回櫃位選單", "請重新選擇【櫃位/區域】：", zoneItems, true);
+      replyFlexMenuCard(replyToken, "↩️ 已返回櫃位選單", "請重新選擇【櫃位/區域】：", zoneItems, `↩️ 返回 [${session.floorName || "空間清單"}]`);
       break;
 
     case 'STATE_CHOOSE_CELL':
@@ -406,7 +395,7 @@ function handleGoBack(replyToken, lineUid, session, userName) {
       session.state = 'STATE_CHOOSE_BOX';
       cache.put(lineUid, JSON.stringify(session), 1200);
       const boxItems = boxes.map(b => ({ title: b.display_label, desc: `櫃位編號：${b.box_id}`, value: b.display_label }));
-      replyFlexMenuCard(replyToken, "↩️ 已返回櫃子選單", "請重新選擇【盤點櫃子】：", boxItems, true);
+      replyFlexMenuCard(replyToken, "↩️ 已返回櫃子選單", "請重新選擇【盤點櫃子】：", boxItems, `↩️ 返回 [${session.locId || "櫃位分區"}]`);
       break;
 
     default:
@@ -414,7 +403,7 @@ function handleGoBack(replyToken, lineUid, session, userName) {
       session.state = 'STATE_CHOOSE_SITE';
       cache.put(lineUid, JSON.stringify(session), 1200);
       const defaultItems = defaultSites.map(s => ({ title: s, desc: "點擊進入此據點", value: s }));
-      replyFlexMenuCard(replyToken, "🙏 選擇盤點據點", "請選擇您所在的【據點】：", defaultItems, false);
+      replyFlexMenuCard(replyToken, "🙏 選擇盤點據點", "請選擇您所在的【據點】：", defaultItems, null);
       break;
   }
 }
@@ -779,7 +768,11 @@ function replyTextMessage(replyToken, text) {
   sendToLine({ replyToken: replyToken, messages: [{ type: 'text', text: text }] });
 }
 
-function replyFlexMenuCard(replyToken, title, subtitle, items, showBackBtn = true) {
+/**
+ * 🌟 長輩大字大按鈕 Flex 選單生成器 (支援自訂動態返回文字)
+ * @param {string|null} backBtnLabel - 自訂返回按鈕文字，如「↩️ 返回 [大安]」；傳 null 則不顯示返回按鈕
+ */
+function replyFlexMenuCard(replyToken, title, subtitle, items, backBtnLabel = null) {
   const buttonRows = items.map(item => ({
     "type": "box",
     "layout": "vertical",
@@ -832,7 +825,8 @@ function replyFlexMenuCard(replyToken, title, subtitle, items, showBackBtn = tru
     }
   };
 
-  if (showBackBtn) {
+  // 🌟 動態呈現具體返回按鈕
+  if (backBtnLabel) {
     flexContents.footer = {
       "type": "box",
       "layout": "vertical",
@@ -843,8 +837,8 @@ function replyFlexMenuCard(replyToken, title, subtitle, items, showBackBtn = tru
           "height": "md",
           "action": {
             "type": "message",
-            "label": BTN_BACK_TEXT,
-            "text": BTN_BACK_TEXT
+            "label": backBtnLabel,
+            "text": backBtnLabel
           }
         }
       ]
@@ -861,9 +855,6 @@ function replyFlexMenuCard(replyToken, title, subtitle, items, showBackBtn = tru
   });
 }
 
-/**
- * 🌟 核心新增：盤點完成後三大情境選擇卡片 (大字大按鈕)
- */
 function replyFlexPostStocktakeCard(replyToken, userName, cellCode, itemName, qty) {
   const flexContents = {
     "type": "bubble",
@@ -895,7 +886,6 @@ function replyFlexPostStocktakeCard(replyToken, userName, cellCode, itemName, qt
         { "type": "separator", "margin": "lg" },
         { "type": "text", "text": "下一步您想要：", "weight": "bold", "size": "md", "color": "#111827", "margin": "lg" },
         
-        // 按鈕 1：同格位下一件 (主按鈕 綠色)
         {
           "type": "button",
           "style": "primary",
@@ -908,7 +898,6 @@ function replyFlexPostStocktakeCard(replyToken, userName, cellCode, itemName, qt
             "text": CMD_NEXT_SKU_SAME_CELL
           }
         },
-        // 按鈕 2：同空間換櫃位 (次要按鈕 藍綠色)
         {
           "type": "button",
           "style": "primary",
@@ -921,7 +910,6 @@ function replyFlexPostStocktakeCard(replyToken, userName, cellCode, itemName, qt
             "text": CMD_CHANGE_BOX_SAME_ROOM
           }
         },
-        // 按鈕 3：更換據點或空間 (灰色按鈕)
         {
           "type": "button",
           "style": "secondary",
