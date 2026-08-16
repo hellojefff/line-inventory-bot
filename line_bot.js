@@ -1,6 +1,6 @@
 /**
- * 覺風物資管理系統 - 全網最防呆點選版 LINE Bot (動態具名返回按鈕版)
- * 核心升級：將「回上一層」動態命名為具體空間/櫃名 (如「↩️ 返回 [大安]」、「↩️ 返回 [B19櫃]」)
+ * 覺風物資管理系統 - 全網最防呆點選版 LINE Bot (長輩直覺純中文導航版)
+ * 核心升級：全面消除冷冰冰英數代碼，所有按鈕與返回鍵一律呈現純中文實體名稱
  */
 
 // ==================== 全局配置 ====================
@@ -134,7 +134,7 @@ function handleLineMessage(event) {
       cache.put(lineUid, JSON.stringify(session), 1200);
       
       const floorItems = floors.map(f => ({ title: f, desc: `${selectedSite} ${f}`, value: f }));
-      replyFlexMenuCard(replyToken, "🏛️ 選擇所在樓層", `已選擇據點：${selectedSite}\n請點選所在【樓層】：`, floorItems, `↩️ 返回 [重選據點]`);
+      replyFlexMenuCard(replyToken, "🏛️ 選擇所在樓層", `已選擇據點：${selectedSite}\n請點選所在【樓層】：`, floorItems, `↩️ 返回 [選擇據點]`);
       break;
 
     // 🏢 狀態 0.5：志工點選「樓層」 ➔ 導向選擇「詳細空間」
@@ -145,7 +145,7 @@ function handleLineMessage(event) {
       if (details.length === 0) {
         const floorsInSite = getFloorsBySite(session.siteName || "");
         const floorItems = floorsInSite.map(f => ({ title: f, desc: `${session.siteName} ${f}`, value: f }));
-        replyFlexMenuCard(replyToken, "⚠️ 查無空間", `找不到「${session.siteName} ${selectedFloor}」的空間配置，請重新選擇樓層：`, floorItems, `↩️ 返回 [重選據點]`);
+        replyFlexMenuCard(replyToken, "⚠️ 查無空間", `找不到「${session.siteName} ${selectedFloor}」的空間配置，請重新選擇樓層：`, floorItems, `↩️ 返回 [選擇據點]`);
         return;
       }
       
@@ -153,68 +153,79 @@ function handleLineMessage(event) {
       session.floorName = selectedFloor;
       cache.put(lineUid, JSON.stringify(session), 1200);
       
-      const spaceItems = details.map(d => ({ title: d.space_name, desc: `場域代碼：${d.loc_id}`, value: d.loc_id }));
-      replyFlexMenuCard(replyToken, "🏢 選擇具體空間", `已選擇：${session.siteName} ${selectedFloor}\n請點選具體【空間/展示區】：`, spaceItems, `↩️ 返回 [${session.siteName} 樓層清單]`);
+      const spaceItems = details.map(d => ({ title: d.space_name, desc: `${session.siteName} ${selectedFloor} - ${d.space_name}`, value: d.loc_id }));
+      replyFlexMenuCard(replyToken, "🏢 選擇具體空間", `已選擇：${session.siteName} ${selectedFloor}\n請點選具體【空間/展示區】：`, spaceItems, `↩️ 返回 [${session.siteName} 樓層]`);
       break;
 
-    // 📍 狀態 1：志工點選「詳細空間」 ➔ 導向選擇「櫃位」
+    // 📍 狀態 1：志工點選「詳細空間」 ➔ 導向選擇「櫃位分區」
     case 'STATE_CHOOSE_LOC':
       const locId = userMessage.toUpperCase();
       const zones = getZonesByLocation(locId); 
       
+      // 依據 locId 反查該空間的中文名稱並寫入 Session
+      const currentLocInfo = getLocationInfoById(locId);
+      const spaceName = currentLocInfo ? currentLocInfo.space_name : locId;
+      
       if (zones.length === 0) {
         const currentDetails = getDetailsBySiteAndFloor(session.siteName || "", session.floorName || "");
-        const spaceItems = currentDetails.map(d => ({ title: d.space_name, desc: `場域代碼：${d.loc_id}`, value: d.loc_id }));
-        replyFlexMenuCard(replyToken, "⚠️ 查無櫃位", `找不到場域 "${userMessage}" 下的櫃位明細。請重新點選：`, spaceItems, `↩️ 返回 [${session.siteName} 樓層清單]`);
+        const spaceItems = currentDetails.map(d => ({ title: d.space_name, desc: d.space_name, value: d.loc_id }));
+        replyFlexMenuCard(replyToken, "⚠️ 查無櫃位", `找不到「${spaceName}」下的櫃位明細。請重新點選：`, spaceItems, `↩️ 返回 [${session.siteName} 樓層]`);
         return;
       }
       
       session.state = 'STATE_CHOOSE_ZONE';
       session.locId = locId;
+      session.spaceName = spaceName; // 🌟 儲存純中文空間名稱
       cache.put(lineUid, JSON.stringify(session), 1200);
       
-      const zoneItems = zones.map(z => ({ title: z.zone_name, desc: `編碼：${z.zone_id}`, value: z.zone_id }));
-      replyFlexMenuCard(replyToken, "🗄️ 選擇櫃位區域", `已定位場域：${locId}\n請點選要盤點的【櫃位/區域】：`, zoneItems, `↩️ 返回 [${session.floorName || "空間清單"}]`);
+      const zoneItems = zones.map(z => ({ title: z.zone_name, desc: `${spaceName} - ${z.zone_name}`, value: z.zone_id }));
+      replyFlexMenuCard(replyToken, "🗄️ 選擇櫃位區域", `已定位空間：【${spaceName}】\n請點選要盤點的【櫃位/區域】：`, zoneItems, `↩️ 返回 [${session.floorName || "樓層空間"}]`);
       break;
 
-    // 🗄️ 狀態 2：志工點選「儲位分區」 ➔ 導向選擇「櫃子」
+    // 🗄️ 狀態 2：志工點選「櫃位分區」 ➔ 導向選擇「櫃子」
     case 'STATE_CHOOSE_ZONE':
       const zoneId = userMessage.toUpperCase();
       const boxes = parseBoxesFromZone(zoneId); 
       
+      // 依據 zoneId 取得中文分區名稱
+      const zoneName = getZoneNameById(zoneId);
+      
       if (boxes.length === 0) {
         const currentZones = getZonesByLocation(session.locId || "");
-        const zoneItems = currentZones.map(z => ({ title: z.zone_name, desc: `編碼：${z.zone_id}`, value: z.zone_id }));
-        replyFlexMenuCard(replyToken, "❌ 查無櫃子", `找不到明細 "${zoneId}" 的空間配置。請重新點選：`, zoneItems, `↩️ 返回 [${session.floorName || "空間清單"}]`);
+        const zoneItems = currentZones.map(z => ({ title: z.zone_name, desc: z.zone_name, value: z.zone_id }));
+        replyFlexMenuCard(replyToken, "❌ 查無櫃子", `找不到「${zoneName}」的空間配置。請重新點選：`, zoneItems, `↩️ 返回 [${session.spaceName || "空間清單"}]`);
         return;
       }
       
       session.state = 'STATE_CHOOSE_BOX';
       session.zoneId = zoneId;
+      session.zoneName = zoneName; // 🌟 儲存純中文分區名稱
       cache.put(lineUid, JSON.stringify(session), 1200); 
       
-      const boxItems = boxes.map(b => ({ title: b.display_label, desc: `櫃位編號：${b.box_id}`, value: b.display_label }));
-      replyFlexMenuCard(replyToken, "🗃️ 選擇盤點櫃子", `已鎖定區域：${zoneId}\n請點選要盤點的【櫃子】：`, boxItems, `↩️ 返回 [${session.locId || "櫃位分區"}]`);
+      const boxItems = boxes.map(b => ({ title: b.display_label, desc: `點擊進入 ${b.display_label}`, value: b.display_label }));
+      replyFlexMenuCard(replyToken, "🗃️ 選擇盤點櫃子", `已鎖定：【${zoneName}】\n請點選要盤點的【櫃子】：`, boxItems, `↩️ 返回 [${session.spaceName || "空間清單"}]`);
       break;
       
     // 🗃️ 狀態 3：志工點選「櫃子」 ➔ 導向選擇「層格」
     case 'STATE_CHOOSE_BOX':
-      const selectedBoxId = userMessage.split('-')[0].toUpperCase().trim();
+      const selectedBoxStr = userMessage;
+      const selectedBoxId = selectedBoxStr.split('-')[0].toUpperCase().trim();
       const shelves = parseShelvesFromBox(session.zoneId, selectedBoxId); 
       
       if (shelves.length === 0) {
         const boxes = parseBoxesFromZone(session.zoneId);
-        const boxItems = boxes.map(b => ({ title: b.display_label, desc: `櫃位編號：${b.box_id}`, value: b.display_label }));
-        replyFlexMenuCard(replyToken, "❌ 查無層格", `找不到該櫃子配置，請重新選擇櫃子：`, boxItems, `↩️ 返回 [${session.locId || "櫃位分區"}]`);
+        const boxItems = boxes.map(b => ({ title: b.display_label, desc: b.display_label, value: b.display_label }));
+        replyFlexMenuCard(replyToken, "❌ 查無層格", `找不到該櫃子配置，請重新選擇櫃子：`, boxItems, `↩️ 返回 [${session.zoneName || "櫃位分區"}]`);
         return;
       }
       
       session.state = 'STATE_CHOOSE_CELL';
       session.boxId = selectedBoxId;
+      session.boxName = selectedBoxStr; // 🌟 儲存純中文櫃名
       cache.put(lineUid, JSON.stringify(session), 1200);
       
-      const shelfItems = shelves.map(s => ({ title: `📍 格位：${s.short_code}`, desc: s.name, value: s.cell_code }));
-      replyFlexMenuCard(replyToken, "🚪 選擇盤點層格", `已對齊櫃體：${selectedBoxId}\n請點選具體【層格】：`, shelfItems, `↩️ 返回 [${selectedBoxId} 櫃體清單]`);
+      const shelfItems = shelves.map(s => ({ title: `📍 ${s.name}`, desc: `格位：${s.short_code}`, value: s.cell_code }));
+      replyFlexMenuCard(replyToken, "🚪 選擇盤點層格", `已對齊櫃體：【${selectedBoxStr}】\n請點選具體【層格】：`, shelfItems, `↩️ 返回 [${session.zoneName || "櫃位分區"}]`);
       break;
       
     // 📍 狀態 4：點選微細層格 ➔ 導向搜尋物資
@@ -222,12 +233,12 @@ function handleLineMessage(event) {
       let cellCode = userMessage.toUpperCase().trim();
       
       const validShelves = parseShelvesFromBox(session.zoneId, session.boxId);
-      const isCellValid = validShelves.some(s => s.cell_code.toUpperCase().trim() === cellCode);
+      const matchedShelf = validShelves.find(s => s.cell_code.toUpperCase().trim() === cellCode);
       
-      if (!isCellValid) {
+      if (!matchedShelf) {
         if (validShelves.length > 0) {
-          const shelfItems = validShelves.map(s => ({ title: `📍 格位：${s.short_code}`, desc: s.name, value: s.cell_code }));
-          replyFlexMenuCard(replyToken, "⚠️ 請重新點選", `未能識別層格，請點選下方大按鈕：`, shelfItems, `↩️ 返回 [${session.boxId || "層格清單"}]`);
+          const shelfItems = validShelves.map(s => ({ title: `📍 ${s.name}`, desc: `格位：${s.short_code}`, value: s.cell_code }));
+          replyFlexMenuCard(replyToken, "⚠️ 請重新點選", `未能識別層格，請點選下方大按鈕：`, shelfItems, `↩️ 返回 [${session.boxName || "櫃子清單"}]`);
         } else {
           replyTextMessage(replyToken, `❌ 系統狀態中斷，請重新輸入【開始盤點】。`);
         }
@@ -236,9 +247,10 @@ function handleLineMessage(event) {
       
       session.state = 'STATE_INPUT_SKU';
       session.cellCode = cellCode;
+      session.shelfName = matchedShelf.name; // 🌟 儲存層格中文名稱
       cache.put(lineUid, JSON.stringify(session), 1200);
       
-      replyTextMessage(replyToken, `📍 已定位格位：\n${cellCode}\n\n請開啟相機「掃描物品條碼」，或直接「輸入物品名稱關鍵字」進行搜尋：`);
+      replyTextMessage(replyToken, `📍 已定位格位：\n【${session.spaceName} - ${session.boxName} - ${matchedShelf.name}】\n(${cellCode})\n\n請開啟相機「掃描物品條碼」，或直接「輸入物品名稱關鍵字」進行搜尋：`);
       break;
       
     // 📦 狀態 5：搜尋物資 (SKU)
@@ -286,7 +298,8 @@ function handleLineMessage(event) {
         session.lastQty = qty;
         cache.put(lineUid, JSON.stringify(session), 1800);
 
-        replyFlexPostStocktakeCard(replyToken, myName, session.cellCode, session.itemName, qty);
+        const fullChineseLocation = `${session.siteName || ""} ${session.floorName || ""} ${session.spaceName || ""} - ${session.boxName || ""} (${session.shelfName || ""})`;
+        replyFlexPostStocktakeCard(replyToken, myName, fullChineseLocation, session.cellCode, session.itemName, qty);
       } else {
         replyTextMessage(replyToken, `❌ 寫入失敗：資料庫關聯驗證未通過，請檢查人員主檔與品項主檔。`);
       }
@@ -299,7 +312,7 @@ function handleLineMessage(event) {
   }
 }
 
-// ==================== 連續盤點分流與動態返回控制器 ====================
+// ==================== 連續盤點分流與純中文返回控制器 ====================
 
 function handlePostStocktakeAction(replyToken, lineUid, session, userMessage, userName) {
   const cache = CacheService.getUserCache();
@@ -307,7 +320,7 @@ function handlePostStocktakeAction(replyToken, lineUid, session, userMessage, us
   if (userMessage === CMD_NEXT_SKU_SAME_CELL) {
     session.state = 'STATE_INPUT_SKU';
     cache.put(lineUid, JSON.stringify(session), 1800);
-    replyTextMessage(replyToken, `📍 繼續盤點目前格位：\n${session.cellCode}\n\n請開啟相機「掃描物品條碼」，或「輸入物品名稱關鍵字」進行搜尋：`);
+    replyTextMessage(replyToken, `📍 繼續盤點目前格位：\n【${session.spaceName || ""} - ${session.boxName || ""}】\n(${session.cellCode})\n\n請開啟相機「掃描物品條碼」，或「輸入物品名稱關鍵字」進行搜尋：`);
     return;
   }
 
@@ -319,8 +332,8 @@ function handlePostStocktakeAction(replyToken, lineUid, session, userMessage, us
     }
     session.state = 'STATE_CHOOSE_ZONE';
     cache.put(lineUid, JSON.stringify(session), 1800);
-    const zoneItems = zones.map(z => ({ title: z.zone_name, desc: `編碼：${z.zone_id}`, value: z.zone_id }));
-    replyFlexMenuCard(replyToken, "🗄️ 選擇同空間其他櫃位", `目前所在空間：${session.locId}\n請點選要盤點的【櫃位/區域】：`, zoneItems, `↩️ 返回 [${session.floorName || "空間清單"}]`);
+    const zoneItems = zones.map(z => ({ title: z.zone_name, desc: z.zone_name, value: z.zone_id }));
+    replyFlexMenuCard(replyToken, "🗄️ 選擇同空間其他櫃位", `目前所在空間：【${session.spaceName || "小教室"}】\n請點選要盤點的【櫃位/區域】：`, zoneItems, `↩️ 返回 [${session.floorName || "空間清單"}]`);
     return;
   }
 
@@ -358,6 +371,7 @@ function handleGoBack(replyToken, lineUid, session, userName) {
   const cache = CacheService.getUserCache();
 
   switch (session.state) {
+    // 在選樓層按返回 ➔ 回到選據點
     case 'STATE_CHOOSE_FLOOR':
       const sites = getAllSites();
       session.state = 'STATE_CHOOSE_SITE';
@@ -366,36 +380,40 @@ function handleGoBack(replyToken, lineUid, session, userName) {
       replyFlexMenuCard(replyToken, "↩️ 已返回據點選單", "請重新選擇【據點】：", siteItems, null);
       break;
 
+    // 在選空間按返回 ➔ 回到選樓層
     case 'STATE_CHOOSE_LOC':
       const floors = getFloorsBySite(session.siteName || "");
       session.state = 'STATE_CHOOSE_FLOOR';
       cache.put(lineUid, JSON.stringify(session), 1200);
       const floorItems = floors.map(f => ({ title: f, desc: `${session.siteName} ${f}`, value: f }));
-      replyFlexMenuCard(replyToken, "↩️ 已返回樓層選單", `請重新選擇【${session.siteName}】的樓層：`, floorItems, `↩️ 返回 [重選據點]`);
+      replyFlexMenuCard(replyToken, "↩️ 已返回樓層選單", `請重新選擇【${session.siteName}】的樓層：`, floorItems, `↩️ 返回 [選擇據點]`);
       break;
 
+    // 在選櫃位分區按返回 ➔ 回到選空間
     case 'STATE_CHOOSE_ZONE':
       const details = getDetailsBySiteAndFloor(session.siteName || "", session.floorName || "");
       session.state = 'STATE_CHOOSE_LOC';
       cache.put(lineUid, JSON.stringify(session), 1200);
-      const spaceItems = details.map(d => ({ title: d.space_name, desc: `場域代碼：${d.loc_id}`, value: d.loc_id }));
-      replyFlexMenuCard(replyToken, "↩️ 已返回空間選單", "請重新選擇【空間/展示區】：", spaceItems, `↩️ 返回 [${session.siteName} 樓層清單]`);
+      const spaceItems = details.map(d => ({ title: d.space_name, desc: d.space_name, value: d.loc_id }));
+      replyFlexMenuCard(replyToken, "↩️ 已返回空間選單", "請重新選擇【空間/展示區】：", spaceItems, `↩️ 返回 [${session.siteName} 樓層]`);
       break;
 
+    // 在選櫃子按返回 ➔ 回到選櫃位分區
     case 'STATE_CHOOSE_BOX':
       const zones = getZonesByLocation(session.locId || "");
       session.state = 'STATE_CHOOSE_ZONE';
       cache.put(lineUid, JSON.stringify(session), 1200);
-      const zoneItems = zones.map(z => ({ title: z.zone_name, desc: `編碼：${z.zone_id}`, value: z.zone_id }));
-      replyFlexMenuCard(replyToken, "↩️ 已返回櫃位選單", "請重新選擇【櫃位/區域】：", zoneItems, `↩️ 返回 [${session.floorName || "空間清單"}]`);
+      const zoneItems = zones.map(z => ({ title: z.zone_name, desc: z.zone_name, value: z.zone_id }));
+      replyFlexMenuCard(replyToken, "↩️ 已返回櫃位選單", `請重新選擇【${session.spaceName || "空間"}】的櫃位區域：`, zoneItems, `↩️ 返回 [${session.floorName || "空間清單"}]`);
       break;
 
+    // 在選層格按返回 ➔ 回到選櫃子
     case 'STATE_CHOOSE_CELL':
       const boxes = parseBoxesFromZone(session.zoneId || "");
       session.state = 'STATE_CHOOSE_BOX';
       cache.put(lineUid, JSON.stringify(session), 1200);
-      const boxItems = boxes.map(b => ({ title: b.display_label, desc: `櫃位編號：${b.box_id}`, value: b.display_label }));
-      replyFlexMenuCard(replyToken, "↩️ 已返回櫃子選單", "請重新選擇【盤點櫃子】：", boxItems, `↩️ 返回 [${session.locId || "櫃位分區"}]`);
+      const boxItems = boxes.map(b => ({ title: b.display_label, desc: b.display_label, value: b.display_label }));
+      replyFlexMenuCard(replyToken, "↩️ 已返回櫃子選單", `請重新選擇【${session.zoneName || "分區"}】的櫃子：`, boxItems, `↩️ 返回 [${session.spaceName || "空間清單"}]`);
       break;
 
     default:
@@ -408,7 +426,7 @@ function handleGoBack(replyToken, lineUid, session, userName) {
   }
 }
 
-// ==================== 資料庫讀取與層級解析核心 ====================
+// ==================== 資料庫讀取與輔助反查核心 ====================
 
 function getAllSites() {
   const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
@@ -488,6 +506,28 @@ function getDetailsBySiteAndFloor(siteName, floorName) {
   return details;
 }
 
+/**
+ * 依據場域編碼反查中文空間名稱
+ */
+function getLocationInfoById(locId) {
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const sheet = ss.getSheetByName("LOC_MASTER");
+  if (!sheet) return null;
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0];
+  const idIdx = headers.indexOf("場域編碼");
+  const descIdx = headers.indexOf("儲位詳細說明");
+  const nameIdx = headers.indexOf("場域名稱");
+
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][idIdx] && data[i][idIdx].toString().trim() === locId) {
+      const spaceName = descIdx !== -1 && data[i][descIdx] ? data[i][descIdx].toString().trim() : (data[i][nameIdx] || locId);
+      return { loc_id: locId, space_name: spaceName };
+    }
+  }
+  return null;
+}
+
 function getZonesByLocation(locId) {
   const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
   const sheet = ss.getSheetByName("SUB_ZONE_DETAIL");
@@ -513,6 +553,26 @@ function getZonesByLocation(locId) {
     }
   }
   return zones;
+}
+
+/**
+ * 依據分區編碼反查中文分區名稱
+ */
+function getZoneNameById(zoneId) {
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const sheet = ss.getSheetByName("SUB_ZONE_DETAIL");
+  if (!sheet) return zoneId;
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0];
+  const zoneIdIdx = headers.indexOf('儲位明細編碼');
+  const zoneNameIdx = headers.indexOf('儲位分區名稱');
+
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][zoneIdIdx] && data[i][zoneIdIdx].toString().trim() === zoneId) {
+      return (zoneNameIdx !== -1 && data[i][zoneNameIdx]) ? data[i][zoneNameIdx].toString().trim() : zoneId;
+    }
+  }
+  return zoneId;
 }
 
 function parseBoxesFromZone(zoneId) {
@@ -768,10 +828,6 @@ function replyTextMessage(replyToken, text) {
   sendToLine({ replyToken: replyToken, messages: [{ type: 'text', text: text }] });
 }
 
-/**
- * 🌟 長輩大字大按鈕 Flex 選單生成器 (支援自訂動態返回文字)
- * @param {string|null} backBtnLabel - 自訂返回按鈕文字，如「↩️ 返回 [大安]」；傳 null 則不顯示返回按鈕
- */
 function replyFlexMenuCard(replyToken, title, subtitle, items, backBtnLabel = null) {
   const buttonRows = items.map(item => ({
     "type": "box",
@@ -825,7 +881,6 @@ function replyFlexMenuCard(replyToken, title, subtitle, items, backBtnLabel = nu
     }
   };
 
-  // 🌟 動態呈現具體返回按鈕
   if (backBtnLabel) {
     flexContents.footer = {
       "type": "box",
@@ -855,7 +910,7 @@ function replyFlexMenuCard(replyToken, title, subtitle, items, backBtnLabel = nu
   });
 }
 
-function replyFlexPostStocktakeCard(replyToken, userName, cellCode, itemName, qty) {
+function replyFlexPostStocktakeCard(replyToken, userName, fullChineseLocation, cellCode, itemName, qty) {
   const flexContents = {
     "type": "bubble",
     "header": {
@@ -878,8 +933,9 @@ function replyFlexPostStocktakeCard(replyToken, userName, cellCode, itemName, qt
           "paddingAll": "md",
           "cornerRadius": "md",
           "contents": [
-            { "type": "text", "text": `📍 目前格位：${cellCode}`, "weight": "bold", "size": "sm", "color": "#374151" },
-            { "type": "text", "text": `📦 物品：${itemName}`, "size": "md", "weight": "bold", "color": "#111827", "margin": "xs" },
+            { "type": "text", "text": `📍 位置：${fullChineseLocation}`, "weight": "bold", "size": "sm", "color": "#374151", "wrap": true },
+            { "type": "text", "text": `代碼：${cellCode}`, "size": "xs", "color": "#9CA3AF", "margin": "xs" },
+            { "type": "text", "text": `📦 物品：${itemName}`, "size": "md", "weight": "bold", "color": "#111827", "margin": "sm" },
             { "type": "text", "text": `🔢 實清數量：${qty} 本/套`, "size": "sm", "color": "#059669", "margin": "xs" }
           ]
         },
