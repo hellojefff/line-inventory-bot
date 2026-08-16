@@ -1,6 +1,6 @@
 /**
- * 覺風物資管理系統 - 全網最防呆點選版 LINE Bot (支援新品項同名比對與自動建檔版)
- * 核心升級：查無品項時提供大按鈕建立新物資、同名重複檢核、自動產生編號並接續盤點
+ * 覺風物資管理系統 - 全網最防呆點選版 LINE Bot (完整品名自訂建檔與查重版)
+ * 核心升級：查無物資時支援「自訂輸入完整品名規格」、「快速簡稱建檔」與「同名查重防呆」
  */
 
 // ==================== 全局配置 ====================
@@ -13,6 +13,7 @@ const CMD_NEXT_SKU_SAME_CELL = 'CMD_NEXT_SKU_SAME_CELL';
 const CMD_CHANGE_BOX_SAME_ROOM = 'CMD_CHANGE_BOX_SAME_ROOM';
 const CMD_CHANGE_SITE = 'CMD_CHANGE_SITE';
 const CMD_CREATE_SKU_CONFIRM = 'CMD_CREATE_SKU_CONFIRM';
+const CMD_INPUT_DETAILED_SKU = 'CMD_INPUT_DETAILED_SKU';
 const CMD_RETRY_SEARCH_SKU = 'CMD_RETRY_SEARCH_SKU';
 
 // ==================== Webhook 進入點 ====================
@@ -252,14 +253,14 @@ function handleLineMessage(event) {
       replyTextMessage(replyToken, `📍 已定位格位：\n【${session.spaceName} - ${session.boxName} - ${matchedShelf.name}】\n(${cellCode})\n\n請開啟相機「掃描物品條碼」，或直接「輸入物品名稱關鍵字」進行搜尋：`);
       break;
       
-    // 📦 狀態 5：搜尋物資 (SKU) ➔ 🌟 查無品項時引導「建立新品項」
+    // 📦 狀態 5：搜尋物資 (SKU)
     case 'STATE_INPUT_SKU':
       const skus = findSKU(userMessage);
       
-      // 💡 查無品項：引導建立新品項或重試
+      // 💡 查無品項：引導選擇「自訂輸入完整品名」或「直接以關鍵字建檔」
       if (skus.length === 0) {
         session.state = 'STATE_CONFIRM_CREATE_SKU';
-        session.pendingItemName = userMessage; // 暫存欲新增的品項名稱
+        session.pendingItemName = userMessage; // 暫存剛才輸入的關鍵字
         cache.put(lineUid, JSON.stringify(session), 1200);
 
         replyFlexCreateSkuCard(replyToken, userMessage);
@@ -281,30 +282,24 @@ function handleLineMessage(event) {
       replyFlexSkuCard(replyToken, session.itemName, session.skuId, cateName);
       break;  
 
-    // ➕ 狀態 5.5：確認建立新品項流程
+    // ➕ 狀態 5.5：確認建檔選擇分流
     case 'STATE_CONFIRM_CREATE_SKU':
+      // 選擇 1：直接以簡短關鍵字建檔
       if (userMessage === CMD_CREATE_SKU_CONFIRM) {
         const newItemName = session.pendingItemName;
-        // 執行查重與自動建檔
-        const createResult = createAndGetNewSKU(newItemName);
-
-        if (!createResult.success) {
-          replyTextMessage(replyToken, `❌ 建立失敗：${createResult.message}`);
-          return;
-        }
-
-        // 成功建立或找到既有同名品項，直接進入數量輸入流程
-        session.state = 'STATE_INPUT_QTY';
-        session.skuId = createResult.skuId;
-        session.itemName = createResult.itemName;
-        session.cateName = createResult.cateName;
-        cache.put(lineUid, JSON.stringify(session), 1200);
-
-        const tipMsg = createResult.isExisting ? `⚠️ 提示：系統已存在相同品項【${createResult.itemName}】(編號: ${createResult.skuId})，已為您自動載入！` : `🎉 新品項建檔成功！\n名稱：${createResult.itemName}\n編號：${createResult.skuId}`;
-        replyTextMessage(replyToken, `${tipMsg}\n\n請在對話框中直接輸入本次盤點的【實清數量】數字（例如：5）：`);
+        executeCreateSkuAndProceed(replyToken, lineUid, session, newItemName);
         return;
       }
 
+      // 選擇 2：自訂輸入完整品名
+      if (userMessage === CMD_INPUT_DETAILED_SKU) {
+        session.state = 'STATE_INPUT_FULL_SKU_NAME';
+        cache.put(lineUid, JSON.stringify(session), 1200);
+        replyTextMessage(replyToken, `✏️ 請在對話框中直接輸入【完整品項名稱與規格】：\n(例如：舒潔三層抽取式衛生紙 100抽)`);
+        return;
+      }
+
+      // 選擇 3：重新搜尋
       if (userMessage === CMD_RETRY_SEARCH_SKU) {
         session.state = 'STATE_INPUT_SKU';
         cache.put(lineUid, JSON.stringify(session), 1200);
@@ -312,9 +307,15 @@ function handleLineMessage(event) {
         return;
       }
 
-      // 若志工直接輸入新的關鍵字，重回搜尋
+      // 防呆：若志工直接輸入新的關鍵字，視為重新搜尋
       session.state = 'STATE_INPUT_SKU';
       handleLineMessage(event);
+      break;
+
+    // 📝 狀態 5.6：收到志工輸入的「完整品項名稱」
+    case 'STATE_INPUT_FULL_SKU_NAME':
+      const detailedItemName = userMessage;
+      executeCreateSkuAndProceed(replyToken, lineUid, session, detailedItemName);
       break;
 
     // 🔢 狀態 6：輸入數量
@@ -350,6 +351,30 @@ function handleLineMessage(event) {
       handlePostStocktakeAction(replyToken, lineUid, session, userMessage, myName);
       break;
   }
+}
+
+// ==================== 輔助：品項建立並轉入數量輸入流程 ====================
+
+function executeCreateSkuAndProceed(replyToken, lineUid, session, itemName) {
+  const cache = CacheService.getUserCache();
+  const createResult = createAndGetNewSKU(itemName);
+
+  if (!createResult.success) {
+    replyTextMessage(replyToken, `❌ 建立失敗：${createResult.message}`);
+    return;
+  }
+
+  session.state = 'STATE_INPUT_QTY';
+  session.skuId = createResult.skuId;
+  session.itemName = createResult.itemName;
+  session.cateName = createResult.cateName;
+  cache.put(lineUid, JSON.stringify(session), 1200);
+
+  const tipMsg = createResult.isExisting 
+    ? `⚠️ 提示：系統已存在完全同名品項【${createResult.itemName}】(編號: ${createResult.skuId})，已自動為您載入！` 
+    : `🎉 新品項建檔成功！\n名稱：${createResult.itemName}\n編號：${createResult.skuId}`;
+
+  replyTextMessage(replyToken, `${tipMsg}\n\n請在對話框中直接輸入本次盤點的【實清數量】數字（例如：5）：`);
 }
 
 // ==================== 連續盤點分流與純中文返回控制器 ====================
@@ -467,11 +492,6 @@ function handleGoBack(replyToken, lineUid, session, userName) {
 
 // ==================== 資料庫讀取與新品項查重建檔核心 ====================
 
-/**
- * 🌟 核心新增：新品項查重檢核與自動建檔
- * @param {string} itemName - 欲建立的品項名稱
- * @returns {object} { success: boolean, skuId: string, itemName: string, cateName: string, isExisting: boolean, message: string }
- */
 function createAndGetNewSKU(itemName) {
   const cleanName = itemName.trim();
   if (!cleanName) {
@@ -499,7 +519,6 @@ function createAndGetNewSKU(itemName) {
   for (let i = 1; i < data.length; i++) {
     const existingName = data[i][itemNameIdx] ? data[i][itemNameIdx].toString().replace(/\s+/g, "").toLowerCase() : "";
     if (existingName === normalizedTarget) {
-      // 找到完全同名的品項，直接返回既有資料，防止重複建立
       return {
         success: true,
         skuId: data[i][skuIdIdx].toString(),
@@ -510,7 +529,7 @@ function createAndGetNewSKU(itemName) {
     }
   }
 
-  // 2. 自動生成全新流水號 SKU ID (例如自動產生 SKU-001 或接續流水號)
+  // 2. 自動生成全新流水號 SKU ID
   const newSkuId = 'SKU-' + String(data.length).padStart(3, '0');
   const defaultCate = "一般物資";
 
@@ -1008,7 +1027,7 @@ function replyFlexMenuCard(replyToken, title, subtitle, items, backBtnLabel = nu
 }
 
 /**
- * 🌟 核心新增：查無品項時，跳出「建立新品項」大字確認卡片
+ * 🌟 核心升級：查無品項時，提供「自訂輸入完整品名」與「直接簡稱建檔」雙重選項
  */
 function replyFlexCreateSkuCard(replyToken, inputKeyword) {
   const flexContents = {
@@ -1026,31 +1045,47 @@ function replyFlexCreateSkuCard(replyToken, inputKeyword) {
       "type": "box",
       "layout": "vertical",
       "contents": [
-        { "type": "text", "text": "您剛才輸入的名稱為：", "size": "sm", "color": "#6B7280" },
+        { "type": "text", "text": "您剛才搜尋的關鍵字：", "size": "sm", "color": "#6B7280" },
         {
           "type": "box",
           "layout": "vertical",
           "backgroundColor": "#F3F4F6",
-          "paddingAll": "lg",
+          "paddingAll": "md",
           "cornerRadius": "md",
           "margin": "sm",
           "contents": [
             { "type": "text", "text": `【${inputKeyword}】`, "weight": "bold", "size": "lg", "color": "#111827", "wrap": true }
           ]
         },
-        { "type": "text", "text": "您是否要將此物資直接新增至系統並進行盤點？", "size": "sm", "color": "#374151", "margin": "md", "wrap": true },
+        { "type": "text", "text": "請選擇建檔方式：", "weight": "bold", "size": "md", "color": "#111827", "margin": "md" },
+        
+        // 選項 1：輸入完整品名 (推薦)
         {
           "type": "button",
           "style": "primary",
           "color": "#16A34A",
           "height": "md",
-          "margin": "lg",
+          "margin": "sm",
           "action": {
             "type": "message",
-            "label": "➕ 建立此新品項並盤點",
+            "label": "✏️ 自訂輸入完整品名規格",
+            "text": CMD_INPUT_DETAILED_SKU
+          }
+        },
+        // 選項 2：直接以關鍵字建檔
+        {
+          "type": "button",
+          "style": "primary",
+          "color": "#0D9488",
+          "height": "md",
+          "margin": "sm",
+          "action": {
+            "type": "message",
+            "label": `⚡ 直接以「${inputKeyword.length > 6 ? inputKeyword.substring(0, 5) + "..." : inputKeyword}」建檔`,
             "text": CMD_CREATE_SKU_CONFIRM
           }
         },
+        // 選項 3：重新搜尋
         {
           "type": "button",
           "style": "secondary",
@@ -1058,7 +1093,7 @@ function replyFlexCreateSkuCard(replyToken, inputKeyword) {
           "margin": "sm",
           "action": {
             "type": "message",
-            "label": "🔍 重新輸入關鍵字",
+            "label": "🔍 重新搜尋關鍵字",
             "text": CMD_RETRY_SEARCH_SKU
           }
         }
@@ -1070,7 +1105,7 @@ function replyFlexCreateSkuCard(replyToken, inputKeyword) {
     replyToken: replyToken,
     messages: [{
       "type": "flex",
-      "altText": "🔍 查無品項，是否建立新品項？",
+      "altText": "🔍 查無品項，請選擇建檔方式",
       "contents": flexContents
     }]
   });
