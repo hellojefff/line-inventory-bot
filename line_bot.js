@@ -1,6 +1,6 @@
 /**
- * 覺風物資管理系統 - 全網最防呆點選版 LINE Bot (單一品項確認卡支援「不是這項/建立新品」版)
- * 核心升級：單筆物資卡片新增「不是這項，建立新品項」與「重新搜尋」，徹底解決誤判無法建檔之痛點
+ * 覺風物資管理系統 - 全網最防呆點選版 LINE Bot (定位格位附帶「返回重選層格」按鈕版)
+ * 核心升級：定位層格後改為發送大字卡片，附帶「↩️ 返回 [同櫃層格清單]」大按鈕，隨時可防呆重選
  */
 
 // ==================== 全局配置 ====================
@@ -235,7 +235,7 @@ function handleLineMessage(event) {
       replyFlexMenuCard(replyToken, "🚪 選擇盤點層格", `已對齊櫃體：【${selectedBoxStr}】\n請點選具體【層格】：`, shelfItems, `↩️ 返回 [${session.zoneName || "櫃位分區"}]`);
       break;
       
-    // 📍 狀態 4：點選微細層格 ➔ 導向搜尋物資
+    // 📍 狀態 4：點選微細層格 ➔ 🌟 升級：噴出定位大字卡片，附帶「↩️ 返回 [同櫃層格]」按鈕
     case 'STATE_CHOOSE_CELL':
       let cellCode = userMessage.toUpperCase().trim();
       
@@ -257,13 +257,14 @@ function handleLineMessage(event) {
       session.shelfName = matchedShelf.name;
       cache.put(lineUid, JSON.stringify(session), 1200);
       
-      replyTextMessage(replyToken, `📍 已定位格位：\n【${session.spaceName} - ${session.boxName} - ${matchedShelf.name}】\n(${cellCode})\n\n🔍 請在下方對話框輸入【物品名稱】或關鍵字進行搜尋：`);
+      // 🌟 發送定位確認大字卡片，讓志工隨時可以點擊返回重選層格
+      replyFlexLocationReadyCard(replyToken, session.spaceName, session.boxName, matchedShelf.name, cellCode);
       break;
       
     // 📦 狀態 5：搜尋物資 (SKU)
     case 'STATE_INPUT_SKU':
       const skus = findSKU(userMessage);
-      session.pendingItemName = userMessage; // 隨時記錄志工本次輸入的關鍵字
+      session.pendingItemName = userMessage;
       
       if (skus.length === 0) {
         session.state = 'STATE_CONFIRM_CREATE_SKU';
@@ -286,7 +287,6 @@ function handleLineMessage(event) {
       const cateName = targetSku['大類'] ? targetSku['大類'].toString() : "一般物資"; 
       cache.put(lineUid, JSON.stringify(session), 1200);
       
-      // 🌟 升級版：單筆確認卡片支援「不是這項/建立新品」按鈕
       replyFlexSkuCard(replyToken, session.itemName, session.skuId, cateName, userMessage);
       break;  
 
@@ -301,7 +301,7 @@ function handleLineMessage(event) {
       if (userMessage === CMD_INPUT_DETAILED_SKU) {
         session.state = 'STATE_INPUT_FULL_SKU_NAME';
         cache.put(lineUid, JSON.stringify(session), 1200);
-        replyTextMessage(replyToken, `✏️ 請在對話框中直接輸入【完整品項名稱與規格】：\n(例如：金剛經講記-智慧之光)`);
+        replyTextMessage(replyToken, `✏️ 請在對話框中直接輸入【完整品項名稱與規格】：\n(例如：舒潔三層抽取式衛生紙 100抽)`);
         return;
       }
 
@@ -378,7 +378,7 @@ function handleSystemCommand(replyToken, lineUid, session, userMessage, userName
   if (userMessage === CMD_NEXT_SKU_SAME_CELL) {
     session.state = 'STATE_INPUT_SKU';
     cache.put(lineUid, JSON.stringify(session), 1800);
-    replyTextMessage(replyToken, `📍 繼續盤點目前格位：\n【${session.spaceName || ""} - ${session.boxName || ""} - ${session.shelfName || ""}】\n(${session.cellCode})\n\n🔍 請在下方對話框輸入【物品名稱】或關鍵字進行搜尋：`);
+    replyFlexLocationReadyCard(replyToken, session.spaceName, session.boxName, session.shelfName, session.cellCode);
     return;
   }
 
@@ -428,7 +428,7 @@ function handleSystemCommand(replyToken, lineUid, session, userMessage, userName
     return;
   }
 
-  // 6. 自訂輸入完整品名指令 (🌟 不是這項時點擊)
+  // 6. 自訂輸入完整品名指令
   if (userMessage === CMD_INPUT_DETAILED_SKU) {
     session.state = 'STATE_INPUT_FULL_SKU_NAME';
     cache.put(lineUid, JSON.stringify(session), 1200);
@@ -483,6 +483,17 @@ function handleGoBack(replyToken, lineUid, session, userName) {
   const cache = CacheService.getUserCache();
 
   switch (session.state) {
+    // 🌟 核心新增：在輸入物品搜尋狀態按返回 ➔ 回到同櫃的層格選單
+    case 'STATE_INPUT_SKU':
+    case 'STATE_CONFIRM_CREATE_SKU':
+    case 'STATE_INPUT_FULL_SKU_NAME':
+      const currentBoxShelves = parseShelvesFromBox(session.zoneId || "", session.boxId || "");
+      session.state = 'STATE_CHOOSE_CELL';
+      cache.put(lineUid, JSON.stringify(session), 1200);
+      const currentShelfItems = currentBoxShelves.map(s => ({ title: `📍 ${s.name}`, desc: `格位：${s.short_code}`, value: s.cell_code }));
+      replyFlexMenuCard(replyToken, "🚪 選擇盤點層格", `已返回櫃體：【${session.boxName || "目前櫃子"}】\n請重新點選【層格】：`, currentShelfItems, `↩️ 返回 [${session.zoneName || "櫃位分區"}]`);
+      break;
+
     case 'STATE_CHOOSE_FLOOR':
       const sites = getAllSites();
       session.state = 'STATE_CHOOSE_SITE';
@@ -1066,6 +1077,80 @@ function replyFlexMenuCard(replyToken, title, subtitle, items, backBtnLabel = nu
   });
 }
 
+/**
+ * 🌟 核心新增：定位格位大字卡片 (附帶「↩️ 返回 [同櫃層格]」大按鈕)
+ */
+function replyFlexLocationReadyCard(replyToken, spaceName, boxName, shelfName, cellCode) {
+  const currentBoxLabel = boxName || "同櫃子";
+  
+  const flexContents = {
+    "type": "bubble",
+    "header": {
+      "type": "box",
+      "layout": "vertical",
+      "backgroundColor": "#F0FDF4",
+      "contents": [
+        { "type": "text", "text": "📍 已定位盤點格位", "weight": "bold", "size": "xl", "color": "#15803D" },
+        { "type": "text", "text": "請在下方對話框輸入物品名稱進行搜尋或建檔", "size": "xs", "color": "#4B5563", "margin": "xs" }
+      ]
+    },
+    "body": {
+      "type": "box",
+      "layout": "vertical",
+      "contents": [
+        {
+          "type": "box",
+          "layout": "vertical",
+          "backgroundColor": "#F9FAFB",
+          "borderColor": "#16A34A",
+          "borderWidth": "1px",
+          "cornerRadius": "md",
+          "paddingAll": "md",
+          "contents": [
+            { "type": "text", "text": `【${spaceName} - ${boxName} - ${shelfName}】`, "weight": "bold", "size": "md", "color": "#111827", "wrap": true },
+            { "type": "text", "text": `格位代碼：${cellCode}`, "size": "xs", "color": "#9CA3AF", "margin": "xs" }
+          ]
+        },
+        {
+          "type": "text",
+          "text": "🔍 請在下方對話框輸入【物品名稱】或關鍵字：",
+          "size": "sm",
+          "weight": "bold",
+          "color": "#374151",
+          "margin": "lg",
+          "wrap": true
+        }
+      ]
+    },
+    "footer": {
+      "type": "box",
+      "layout": "vertical",
+      "contents": [
+        // 🌟 防呆按鈕：按錯了隨時可以返回重新選層格
+        {
+          "type": "button",
+          "style": "secondary",
+          "height": "md",
+          "action": {
+            "type": "message",
+            "label": `↩️ 返回 [${currentBoxLabel.length > 8 ? currentBoxLabel.substring(0, 7) + "..." : currentBoxLabel} 清單]`,
+            "text": `↩️ 返回 [${currentBoxLabel} 清單]`
+          }
+        }
+      ]
+    }
+  };
+
+  sendToLine({
+    replyToken: replyToken,
+    messages: [{
+      "type": "flex",
+      "altText": "📍 已定位格位，請輸入物品名稱",
+      "contents": flexContents
+    }]
+  });
+}
+
 function replyFlexCreateSkuCard(replyToken, inputKeyword) {
   const flexContents = {
     "type": "bubble",
@@ -1352,9 +1437,6 @@ function replyFlexSkuVerticalList(replyToken, skus) {
   });
 }
 
-/**
- * 🌟 核心升級：單筆物資確認卡片擴充「不是這項/建立新品」按鈕
- */
 function replyFlexSkuCard(replyToken, itemName, skuId, cateName, userKeyword) {
   const flexContents = {
     "type": "bubble",
@@ -1371,7 +1453,6 @@ function replyFlexSkuCard(replyToken, itemName, skuId, cateName, userKeyword) {
       "type": "box",
       "layout": "vertical",
       "contents": [
-        // 1. 確認是此物品 (綠色大按鈕)
         {
           "type": "button",
           "style": "primary",
@@ -1383,7 +1464,6 @@ function replyFlexSkuCard(replyToken, itemName, skuId, cateName, userKeyword) {
             "text": skuId
           }
         },
-        // 2. 🌟 核心新增：不是這項，建立新品項 (藍綠色大按鈕)
         {
           "type": "button",
           "style": "primary",
@@ -1396,7 +1476,6 @@ function replyFlexSkuCard(replyToken, itemName, skuId, cateName, userKeyword) {
             "text": CMD_INPUT_DETAILED_SKU
           }
         },
-        // 3. 重新搜尋關鍵字 (灰色大按鈕)
         {
           "type": "button",
           "style": "secondary",
