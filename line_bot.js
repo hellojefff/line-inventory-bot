@@ -1,6 +1,10 @@
 /**
- * 覺風物資管理系統 - 全網最防呆點選版 LINE Bot (結束盤點圖文推播完整版)
- * 核心升級：結束盤點時先發送 GitHub finish.png 插圖，再附上個人化感謝溫馨文字
+ * 覺風物資管理系統 - 全網最防呆點選版 LINE Bot (模式 1：專注當前格位獨立盤點正式版)
+ * 核心特性：
+ * 1. 嚴格依據 [儲位格位代碼 + 品項編號] 獨立管理庫存，同一品項可安全分佈於多個儲位
+ * 2. 盤點完成支援「即時補救更正（改名/改量/刪除）」與小和尚溫馨提示
+ * 3. 結束盤點支援 GitHub finish.png 圖文感謝推播
+ * 4. 全流程大字卡片呈現，具備返回與結束無死角出口
  */
 
 // ==================== 全局配置 ====================
@@ -109,7 +113,7 @@ function handleLineMessage(event) {
     return;
   }
 
-  // 🚪 🌟 核心升級：結束盤點圖文發送
+  // 🚪 結束盤點圖文發送
   if (userMessage === CMD_EXIT_STOCKTAKE || userMessage === '結束盤點') {
     cache.remove(lineUid);
     replyExitStocktakeWithImage(replyToken, myName);
@@ -145,7 +149,7 @@ function handleLineMessage(event) {
   }
   
   switch (session.state) {
-    // 🏛️ 狀態 0：志工點選「據點」 ➔ 導向選擇「樓層」
+    // 🏛️ 狀態 0：選擇據點 ➔ 導向選擇「樓層」
     case 'STATE_CHOOSE_SITE':
       const selectedSite = userMessage;
       const floors = getFloorsBySite(selectedSite);
@@ -165,7 +169,7 @@ function handleLineMessage(event) {
       replyFlexMenuCard(replyToken, "🏛️ 選擇所在樓層", `已選擇據點：${selectedSite}\n請點選所在【樓層】：`, floorItems, `↩️ 返回 [選擇據點]`);
       break;
 
-    // 🏢 狀態 0.5：志工點選「樓層」 ➔ 導向選擇「詳細空間」
+    // 🏢 狀態 0.5：選擇樓層 ➔ 導向選擇「詳細空間」
     case 'STATE_CHOOSE_FLOOR':
       const selectedFloor = userMessage;
       const details = getDetailsBySiteAndFloor(session.siteName, selectedFloor);
@@ -185,7 +189,7 @@ function handleLineMessage(event) {
       replyFlexMenuCard(replyToken, "🏢 選擇具體空間", `已選擇：${session.siteName} ${selectedFloor}\n請點選具體【空間/展示區】：`, spaceItems, `↩️ 返回 [${session.siteName} 樓層]`);
       break;
 
-    // 📍 狀態 1：志工點選「詳細空間」 ➔ 導向選擇「櫃位分區」
+    // 📍 狀態 1：選擇詳細空間 ➔ 導向選擇「櫃位分區」
     case 'STATE_CHOOSE_LOC':
       const locId = userMessage.toUpperCase();
       const zones = getZonesByLocation(locId); 
@@ -209,7 +213,7 @@ function handleLineMessage(event) {
       replyFlexMenuCard(replyToken, "🗄️ 選擇櫃位區域", `已定位空間：【${spaceName}】\n請點選要盤點的【櫃位/區域】：`, zoneItems, `↩️ 返回 [${session.floorName || "樓層空間"}]`);
       break;
 
-    // 🗄️ 狀態 2：志工點選「櫃位分區」 ➔ 導向選擇「櫃子」
+    // 🗄️ 狀態 2：選擇櫃位分區 ➔ 導向選擇「櫃子」
     case 'STATE_CHOOSE_ZONE':
       const zoneId = userMessage.toUpperCase();
       const boxes = parseBoxesFromZone(zoneId); 
@@ -231,7 +235,7 @@ function handleLineMessage(event) {
       replyFlexMenuCard(replyToken, "🗃️ 選擇盤點櫃子", `已鎖定：【${zoneName}】\n請點選要盤點的【櫃子】：`, boxItems, `↩️ 返回 [${session.spaceName || "空間清單"}]`);
       break;
       
-    // 🗃️ 狀態 3：志工點選「櫃子」 ➔ 導向選擇「層格」
+    // 🗃️ 狀態 3：選擇櫃子 ➔ 導向選擇「層格」
     case 'STATE_CHOOSE_BOX':
       const selectedBoxStr = userMessage;
       const selectedBoxId = selectedBoxStr.split('-')[0].toUpperCase().trim();
@@ -253,7 +257,7 @@ function handleLineMessage(event) {
       replyFlexMenuCard(replyToken, "🚪 選擇盤點層格", `已對齊櫃體：【${selectedBoxStr}】\n請點選具體【層格】：`, shelfItems, `↩️ 返回 [${session.zoneName || "櫃位分區"}]`);
       break;
       
-    // 📍 狀態 4：點選微細層格 ➔ 結構化兩行大字定位卡片
+    // 📍 狀態 4：鎖定具體層格 ➔ 呈現專注當前格位的大字卡片
     case 'STATE_CHOOSE_CELL':
       let cellCode = userMessage.toUpperCase().trim();
       
@@ -338,7 +342,7 @@ function handleLineMessage(event) {
       executeCreateSkuAndProceed(replyToken, lineUid, session, userMessage);
       break;
 
-    // 🔢 狀態 6：輸入數量
+    // 🔢 狀態 6：輸入實清數量並獨立更新該格位庫存 (模式 1 核心)
     case 'STATE_INPUT_QTY':
       if (userMessage === session.skuId) {
         replyTextMessage(replyToken, `請在對話框中直接輸入本次盤點的【實清數量】數字（例如：5）：`);
@@ -630,7 +634,65 @@ function handleGoBack(replyToken, lineUid, session, userName) {
   }
 }
 
-// ==================== 資料庫資料修正與刪除補救核心 ====================
+// ==================== 模式 1：庫存寫入、修正與刪除核心 ====================
+
+/**
+ * 🌟 模式 1 核心寫入：依據 [cellCode + skuId] 獨立更新當前格位庫存
+ */
+function executeUpdateStockWorkflow(userId, cellCode, skuId, itemName, qty) {
+  if (!validateStocktakeRelations(userId, skuId)) {
+    return false; 
+  }
+  
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  
+  // 1. 寫入歷史日誌表 STOCKTAKE_LOG
+  let logSheet = ss.getSheetByName("STOCKTAKE_LOG");
+  if (!logSheet) {
+    logSheet = ss.insertSheet("STOCKTAKE_LOG");
+    logSheet.appendRow(["流水編號", "日期時間", "人員編號", "儲位格位代碼", "品項編號", "物品名稱", "實清數量"]);
+  }
+  const nextLogId = 'LOG-' + String(logSheet.getLastRow()).padStart(3, '0');
+  logSheet.appendRow([nextLogId, new Date(), userId, cellCode, skuId, itemName, qty]);
+
+  // 2. 更新當前庫存表 CURRENT_STOCK
+  let stockSheet = ss.getSheetByName("CURRENT_STOCK");
+  if (!stockSheet) {
+    stockSheet = ss.insertSheet("CURRENT_STOCK");
+    stockSheet.appendRow(["場域編碼", "儲位格位代碼", "品項編號", "物品名稱", "現有庫存量"]);
+  }
+  
+  const stockData = stockSheet.getDataRange().getValues();
+  const stockHeaders = stockData[0];
+  const cellIdx = stockHeaders.indexOf('儲位格位代碼');
+  const skuIdx = stockHeaders.indexOf('品項編號');
+  const qtyIdx = stockHeaders.indexOf('現有庫存量');
+  let isRecordFound = false;
+
+  // 🌟 嚴格比對：只有「格位代碼」與「品項編號」皆完全相同，才進行數量覆寫
+  for (let i = 1; i < stockData.length; i++) {
+    if (stockData[i][cellIdx] === cellCode && stockData[i][skuIdx] === skuId) {
+      stockSheet.getRange(i + 1, qtyIdx + 1).setValue(qty);
+      isRecordFound = true;
+      break;
+    }
+  }
+
+  // 🌟 若該格位首次存放此物資，新增獨立一列，絕不干擾其他格位的同名物資
+  if (!isRecordFound) {
+    const targetLocId = cellCode.split('-')[0] + '-' + cellCode.split('-')[1];
+    const newRow = new Array(stockHeaders.length).fill("");
+    
+    newRow[stockHeaders.indexOf('場域編碼')] = targetLocId;
+    newRow[cellIdx] = cellCode;
+    newRow[skuIdx] = skuId;
+    newRow[stockHeaders.indexOf('物品名稱')] = itemName;
+    newRow[qtyIdx] = qty;
+    
+    stockSheet.appendRow(newRow);
+  }
+  return true;
+}
 
 function correctLastItemName(skuId, newItemName, cellCode) {
   const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
@@ -723,7 +785,7 @@ function deleteLastRecord(cellCode, skuId) {
   }
 }
 
-// ==================== 資料庫讀取與新品項查重建檔核心 ====================
+// ==================== 資料庫查詢與基礎解析 ====================
 
 function createAndGetNewSKU(itemName) {
   const cleanName = itemName.trim();
@@ -1090,57 +1152,6 @@ function findSKU(keyword) {
   return results;
 }
 
-function executeUpdateStockWorkflow(userId, cellCode, skuId, itemName, qty) {
-  if (!validateStocktakeRelations(userId, skuId)) {
-    return false; 
-  }
-  
-  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
-  
-  let logSheet = ss.getSheetByName("STOCKTAKE_LOG");
-  if (!logSheet) {
-    logSheet = ss.insertSheet("STOCKTAKE_LOG");
-    logSheet.appendRow(["流水編號", "日期時間", "人員編號", "儲位格位代碼", "品項編號", "物品名稱", "實清數量"]);
-  }
-  const nextLogId = 'LOG-' + String(logSheet.getLastRow()).padStart(3, '0');
-  logSheet.appendRow([nextLogId, new Date(), userId, cellCode, skuId, itemName, qty]);
-
-  let stockSheet = ss.getSheetByName("CURRENT_STOCK");
-  if (!stockSheet) {
-    stockSheet = ss.insertSheet("CURRENT_STOCK");
-    stockSheet.appendRow(["場域編碼", "儲位格位代碼", "品項編號", "物品名稱", "現有庫存量"]);
-  }
-  
-  const stockData = stockSheet.getDataRange().getValues();
-  const stockHeaders = stockData[0];
-  const cellIdx = stockHeaders.indexOf('儲位格位代碼');
-  const skuIdx = stockHeaders.indexOf('品項編號');
-  const qtyIdx = stockHeaders.indexOf('現有庫存量');
-  let isRecordFound = false;
-
-  for (let i = 1; i < stockData.length; i++) {
-    if (stockData[i][cellIdx] === cellCode && stockData[i][skuIdx] === skuId) {
-      stockSheet.getRange(i + 1, qtyIdx + 1).setValue(qty);
-      isRecordFound = true;
-      break;
-    }
-  }
-
-  if (!isRecordFound) {
-    const targetLocId = cellCode.split('-')[0] + '-' + cellCode.split('-')[1];
-    const newRow = new Array(stockHeaders.length).fill("");
-    
-    newRow[stockHeaders.indexOf('場域編碼')] = targetLocId;
-    newRow[cellIdx] = cellCode;
-    newRow[skuIdx] = skuId;
-    newRow[stockHeaders.indexOf('物品名稱')] = itemName;
-    newRow[qtyIdx] = qty;
-    
-    stockSheet.appendRow(newRow);
-  }
-  return true;
-}
-
 function validateStocktakeRelations(userId, skuId) {
   const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
   
@@ -1174,9 +1185,6 @@ function replyTextMessage(replyToken, text) {
   sendToLine({ replyToken: replyToken, messages: [{ type: 'text', text: text }] });
 }
 
-/**
- * 🌟 核心新增：結束盤點發送圖片 + 感謝文字
- */
 function replyExitStocktakeWithImage(replyToken, userName) {
   sendToLine({
     replyToken: replyToken,
