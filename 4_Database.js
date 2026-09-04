@@ -1,5 +1,9 @@
 /**
  * 模組 4：資料庫與試算表操作層 (4_Database.js)
+ * 強化重點：
+ * 1. 全面加入 LockService 腳本級分散式鎖，防範併發寫入與 Race Condition
+ * 2. 雙重認證防護：增加手機末 4 碼同名碰撞攔截，要求輸入 10 碼完整手機號
+ * 3. 儲位 JSON 配置解析增加錯誤捕捉與 DebugLog 記錄
  */
 
 function executeUpdateStockWorkflow(userId, cellCode, skuId, itemName, qty) {
@@ -7,142 +11,177 @@ function executeUpdateStockWorkflow(userId, cellCode, skuId, itemName, qty) {
     return false; 
   }
   
-  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
-  
-  // 1. 寫入歷史日誌表 STOCKTAKE_LOG
-  let logSheet = ss.getSheetByName("STOCKTAKE_LOG");
-  if (!logSheet) {
-    logSheet = ss.insertSheet("STOCKTAKE_LOG");
-    logSheet.appendRow(["流水編號", "日期時間", "人員編號", "儲位格位代碼", "品項編號", "物品名稱", "實清數量"]);
-  }
-  const nextLogId = 'LOG-' + String(logSheet.getLastRow()).padStart(3, '0');
-  logSheet.appendRow([nextLogId, new Date(), userId, cellCode, skuId, itemName, qty]);
+  const lock = LockService.getScriptLock();
+  try {
+    // 取得鎖定，最多等待 10 秒
+    lock.waitLock(10000);
 
-  // 2. 更新當前庫存表 CURRENT_STOCK (模式 1：依 cellCode + skuId 獨立更新)
-  let stockSheet = ss.getSheetByName("CURRENT_STOCK");
-  if (!stockSheet) {
-    stockSheet = ss.insertSheet("CURRENT_STOCK");
-    stockSheet.appendRow(["場域編碼", "儲位格位代碼", "品項編號", "物品名稱", "現有庫存量"]);
-  }
-  
-  const stockData = stockSheet.getDataRange().getValues();
-  const stockHeaders = stockData[0];
-  const cellIdx = stockHeaders.indexOf('儲位格位代碼');
-  const skuIdx = stockHeaders.indexOf('品項編號');
-  const qtyIdx = stockHeaders.indexOf('現有庫存量');
-  let isRecordFound = false;
-
-  for (let i = 1; i < stockData.length; i++) {
-    if (stockData[i][cellIdx] === cellCode && stockData[i][skuIdx] === skuId) {
-      stockSheet.getRange(i + 1, qtyIdx + 1).setValue(qty);
-      isRecordFound = true;
-      break;
+    const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+    
+    // 1. 寫入歷史日誌表 STOCKTAKE_LOG
+    let logSheet = ss.getSheetByName("STOCKTAKE_LOG");
+    if (!logSheet) {
+      logSheet = ss.insertSheet("STOCKTAKE_LOG");
+      logSheet.appendRow(["流水編號", "日期時間", "人員編號", "儲位格位代碼", "品項編號", "物品名稱", "實清數量"]);
     }
-  }
+    const nextLogId = 'LOG-' + String(logSheet.getLastRow()).padStart(3, '0');
+    logSheet.appendRow([nextLogId, new Date(), userId, cellCode, skuId, itemName, qty]);
 
-  if (!isRecordFound) {
-    const targetLocId = cellCode.split('-')[0] + '-' + cellCode.split('-')[1];
-    const newRow = new Array(stockHeaders.length).fill("");
+    // 2. 更新當前庫存表 CURRENT_STOCK (模式 1：依 cellCode + skuId 獨立更新)
+    let stockSheet = ss.getSheetByName("CURRENT_STOCK");
+    if (!stockSheet) {
+      stockSheet = ss.insertSheet("CURRENT_STOCK");
+      stockSheet.appendRow(["場域編碼", "儲位格位代碼", "品項編號", "物品名稱", "現有庫存量"]);
+    }
     
-    newRow[stockHeaders.indexOf('場域編碼')] = targetLocId;
-    newRow[cellIdx] = cellCode;
-    newRow[skuIdx] = skuId;
-    newRow[stockHeaders.indexOf('物品名稱')] = itemName;
-    newRow[qtyIdx] = qty;
-    
-    stockSheet.appendRow(newRow);
+    const stockData = stockSheet.getDataRange().getValues();
+    const stockHeaders = stockData[0];
+    const cellIdx = stockHeaders.indexOf('儲位格位代碼');
+    const skuIdx = stockHeaders.indexOf('品項編號');
+    const qtyIdx = stockHeaders.indexOf('現有庫存量');
+    let isRecordFound = false;
+
+    for (let i = 1; i < stockData.length; i++) {
+      if (stockData[i][cellIdx] === cellCode && stockData[i][skuIdx] === skuId) {
+        stockSheet.getRange(i + 1, qtyIdx + 1).setValue(qty);
+        isRecordFound = true;
+        break;
+      }
+    }
+
+    if (!isRecordFound) {
+      const targetLocId = cellCode.split('-')[0] + '-' + cellCode.split('-')[1];
+      const newRow = new Array(stockHeaders.length).fill("");
+      
+      newRow[stockHeaders.indexOf('場域編碼')] = targetLocId;
+      newRow[cellIdx] = cellCode;
+      newRow[skuIdx] = skuId;
+      newRow[stockHeaders.indexOf('物品名稱')] = itemName;
+      newRow[qtyIdx] = qty;
+      
+      stockSheet.appendRow(newRow);
+    }
+    return true;
+  } catch (e) {
+    writeDebugLog("executeUpdateStockWorkflow 執行失敗或鎖定逾時: " + e.message);
+    return false;
+  } finally {
+    lock.releaseLock();
   }
-  return true;
 }
 
 function correctLastItemName(skuId, newItemName, cellCode) {
-  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
-  
-  const skuSheet = ss.getSheetByName("SKU_MASTER");
-  if (skuSheet) {
-    const data = skuSheet.getDataRange().getValues();
-    const skuIdx = data[0].indexOf("品項編號");
-    const nameIdx = data[0].indexOf("物品名稱");
-    for (let i = 1; i < data.length; i++) {
-      if (data[i][skuIdx] && data[i][skuIdx].toString() === skuId) {
-        skuSheet.getRange(i + 1, nameIdx + 1).setValue(newItemName);
-        break;
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(10000);
+    const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+    
+    const skuSheet = ss.getSheetByName("SKU_MASTER");
+    if (skuSheet) {
+      const data = skuSheet.getDataRange().getValues();
+      const skuIdx = data[0].indexOf("品項編號");
+      const nameIdx = data[0].indexOf("物品名稱");
+      for (let i = 1; i < data.length; i++) {
+        if (data[i][skuIdx] && data[i][skuIdx].toString() === skuId) {
+          skuSheet.getRange(i + 1, nameIdx + 1).setValue(newItemName);
+          break;
+        }
       }
     }
-  }
 
-  const logSheet = ss.getSheetByName("STOCKTAKE_LOG");
-  if (logSheet) {
-    const lastRow = logSheet.getLastRow();
-    if (lastRow > 1) {
-      const headers = logSheet.getRange(1, 1, 1, logSheet.getLastColumn()).getValues()[0];
-      const nameIdx = headers.indexOf("物品名稱");
-      if (nameIdx !== -1) logSheet.getRange(lastRow, nameIdx + 1).setValue(newItemName);
-    }
-  }
-
-  const stockSheet = ss.getSheetByName("CURRENT_STOCK");
-  if (stockSheet) {
-    const data = stockSheet.getDataRange().getValues();
-    const cellIdx = data[0].indexOf("儲位格位代碼");
-    const skuIdx = data[0].indexOf("品項編號");
-    const nameIdx = data[0].indexOf("物品名稱");
-    for (let i = 1; i < data.length; i++) {
-      if (data[i][cellIdx] === cellCode && data[i][skuIdx] === skuId) {
-        stockSheet.getRange(i + 1, nameIdx + 1).setValue(newItemName);
-        break;
+    const logSheet = ss.getSheetByName("STOCKTAKE_LOG");
+    if (logSheet) {
+      const lastRow = logSheet.getLastRow();
+      if (lastRow > 1) {
+        const headers = logSheet.getRange(1, 1, 1, logSheet.getLastColumn()).getValues()[0];
+        const nameIdx = headers.indexOf("物品名稱");
+        if (nameIdx !== -1) logSheet.getRange(lastRow, nameIdx + 1).setValue(newItemName);
       }
     }
+
+    const stockSheet = ss.getSheetByName("CURRENT_STOCK");
+    if (stockSheet) {
+      const data = stockSheet.getDataRange().getValues();
+      const cellIdx = data[0].indexOf("儲位格位代碼");
+      const skuIdx = data[0].indexOf("品項編號");
+      const nameIdx = data[0].indexOf("物品名稱");
+      for (let i = 1; i < data.length; i++) {
+        if (data[i][cellIdx] === cellCode && data[i][skuIdx] === skuId) {
+          stockSheet.getRange(i + 1, nameIdx + 1).setValue(newItemName);
+          break;
+        }
+      }
+    }
+  } catch (e) {
+    writeDebugLog("correctLastItemName 執行失敗: " + e.message);
+  } finally {
+    lock.releaseLock();
   }
 }
 
 function correctLastQty(cellCode, skuId, newQty) {
-  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
-  
-  const logSheet = ss.getSheetByName("STOCKTAKE_LOG");
-  if (logSheet) {
-    const lastRow = logSheet.getLastRow();
-    if (lastRow > 1) {
-      const headers = logSheet.getRange(1, 1, 1, logSheet.getLastColumn()).getValues()[0];
-      const qtyIdx = headers.indexOf("實清數量");
-      if (qtyIdx !== -1) logSheet.getRange(lastRow, qtyIdx + 1).setValue(newQty);
-    }
-  }
-
-  const stockSheet = ss.getSheetByName("CURRENT_STOCK");
-  if (stockSheet) {
-    const data = stockSheet.getDataRange().getValues();
-    const cellIdx = data[0].indexOf("儲位格位代碼");
-    const skuIdx = data[0].indexOf("品項編號");
-    const qtyIdx = data[0].indexOf("現有庫存量");
-    for (let i = 1; i < data.length; i++) {
-      if (data[i][cellIdx] === cellCode && data[i][skuIdx] === skuId) {
-        stockSheet.getRange(i + 1, qtyIdx + 1).setValue(newQty);
-        break;
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(10000);
+    const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+    
+    const logSheet = ss.getSheetByName("STOCKTAKE_LOG");
+    if (logSheet) {
+      const lastRow = logSheet.getLastRow();
+      if (lastRow > 1) {
+        const headers = logSheet.getRange(1, 1, 1, logSheet.getLastColumn()).getValues()[0];
+        const qtyIdx = headers.indexOf("實清數量");
+        if (qtyIdx !== -1) logSheet.getRange(lastRow, qtyIdx + 1).setValue(newQty);
       }
     }
+
+    const stockSheet = ss.getSheetByName("CURRENT_STOCK");
+    if (stockSheet) {
+      const data = stockSheet.getDataRange().getValues();
+      const cellIdx = data[0].indexOf("儲位格位代碼");
+      const skuIdx = data[0].indexOf("品項編號");
+      const qtyIdx = data[0].indexOf("現有庫存量");
+      for (let i = 1; i < data.length; i++) {
+        if (data[i][cellIdx] === cellCode && data[i][skuIdx] === skuId) {
+          stockSheet.getRange(i + 1, qtyIdx + 1).setValue(newQty);
+          break;
+        }
+      }
+    }
+  } catch (e) {
+    writeDebugLog("correctLastQty 執行失敗: " + e.message);
+  } finally {
+    lock.releaseLock();
   }
 }
 
 function deleteLastRecord(cellCode, skuId) {
-  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
-  
-  const logSheet = ss.getSheetByName("STOCKTAKE_LOG");
-  if (logSheet && logSheet.getLastRow() > 1) {
-    logSheet.deleteRow(logSheet.getLastRow());
-  }
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(10000);
+    const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+    
+    const logSheet = ss.getSheetByName("STOCKTAKE_LOG");
+    if (logSheet && logSheet.getLastRow() > 1) {
+      logSheet.deleteRow(logSheet.getLastRow());
+    }
 
-  const stockSheet = ss.getSheetByName("CURRENT_STOCK");
-  if (stockSheet) {
-    const data = stockSheet.getDataRange().getValues();
-    const cellIdx = data[0].indexOf("儲位格位代碼");
-    const skuIdx = data[0].indexOf("品項編號");
-    for (let i = 1; i < data.length; i++) {
-      if (data[i][cellIdx] === cellCode && data[i][skuIdx] === skuId) {
-        stockSheet.deleteRow(i + 1);
-        break;
+    const stockSheet = ss.getSheetByName("CURRENT_STOCK");
+    if (stockSheet) {
+      const data = stockSheet.getDataRange().getValues();
+      const cellIdx = data[0].indexOf("儲位格位代碼");
+      const skuIdx = data[0].indexOf("品項編號");
+      for (let i = 1; i < data.length; i++) {
+        if (data[i][cellIdx] === cellCode && data[i][skuIdx] === skuId) {
+          stockSheet.deleteRow(i + 1);
+          break;
+        }
       }
     }
+  } catch (e) {
+    writeDebugLog("deleteLastRecord 執行失敗: " + e.message);
+  } finally {
+    lock.releaseLock();
   }
 }
 
@@ -152,53 +191,62 @@ function createAndGetNewSKU(itemName) {
     return { success: false, message: "品項名稱不得為空" };
   }
 
-  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
-  const sheet = ss.getSheetByName("SKU_MASTER");
-  if (!sheet) {
-    return { success: false, message: "找不到 SKU_MASTER 資料表" };
-  }
-
-  const data = sheet.getDataRange().getValues();
-  const headers = data[0];
-  const skuIdIdx = headers.indexOf('品項編號');
-  const itemNameIdx = headers.indexOf('物品名稱');
-  const cateIdx = headers.indexOf('大類');
-
-  if (skuIdIdx === -1 || itemNameIdx === -1) {
-    return { success: false, message: "SKU_MASTER 缺少必要欄位" };
-  }
-
-  const normalizedTarget = cleanName.replace(/\s+/g, "").toLowerCase();
-  for (let i = 1; i < data.length; i++) {
-    const existingName = data[i][itemNameIdx] ? data[i][itemNameIdx].toString().replace(/\s+/g, "").toLowerCase() : "";
-    if (existingName === normalizedTarget) {
-      return {
-        success: true,
-        skuId: data[i][skuIdIdx].toString(),
-        itemName: data[i][itemNameIdx].toString(),
-        cateName: (cateIdx !== -1 && data[i][cateIdx]) ? data[i][cateIdx].toString() : "一般物資",
-        isExisting: true
-      };
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(10000);
+    const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+    const sheet = ss.getSheetByName("SKU_MASTER");
+    if (!sheet) {
+      return { success: false, message: "找不到 SKU_MASTER 資料表" };
     }
+
+    const data = sheet.getDataRange().getValues();
+    const headers = data[0];
+    const skuIdIdx = headers.indexOf('品項編號');
+    const itemNameIdx = headers.indexOf('物品名稱');
+    const cateIdx = headers.indexOf('大類');
+
+    if (skuIdIdx === -1 || itemNameIdx === -1) {
+      return { success: false, message: "SKU_MASTER 缺少必要欄位" };
+    }
+
+    const normalizedTarget = cleanName.replace(/\s+/g, "").toLowerCase();
+    for (let i = 1; i < data.length; i++) {
+      const existingName = data[i][itemNameIdx] ? data[i][itemNameIdx].toString().replace(/\s+/g, "").toLowerCase() : "";
+      if (existingName === normalizedTarget) {
+        return {
+          success: true,
+          skuId: data[i][skuIdIdx].toString(),
+          itemName: data[i][itemNameIdx].toString(),
+          cateName: (cateIdx !== -1 && data[i][cateIdx]) ? data[i][cateIdx].toString() : "一般物資",
+          isExisting: true
+        };
+      }
+    }
+
+    const newSkuId = 'SKU-' + String(data.length).padStart(3, '0');
+    const defaultCate = "一般物資";
+
+    const newRow = new Array(headers.length).fill("");
+    newRow[skuIdIdx] = newSkuId;
+    newRow[itemNameIdx] = cleanName;
+    if (cateIdx !== -1) newRow[cateIdx] = defaultCate;
+
+    sheet.appendRow(newRow);
+
+    return {
+      success: true,
+      skuId: newSkuId,
+      itemName: cleanName,
+      cateName: defaultCate,
+      isExisting: false
+    };
+  } catch (e) {
+    writeDebugLog("createAndGetNewSKU 執行失敗: " + e.message);
+    return { success: false, message: "系統繁忙，請稍後再試" };
+  } finally {
+    lock.releaseLock();
   }
-
-  const newSkuId = 'SKU-' + String(data.length).padStart(3, '0');
-  const defaultCate = "一般物資";
-
-  const newRow = new Array(headers.length).fill("");
-  newRow[skuIdIdx] = newSkuId;
-  newRow[itemNameIdx] = cleanName;
-  if (cateIdx !== -1) newRow[cateIdx] = defaultCate;
-
-  sheet.appendRow(newRow);
-
-  return {
-    success: true,
-    skuId: newSkuId,
-    itemName: cleanName,
-    cateName: defaultCate,
-    isExisting: false
-  };
 }
 
 function getAllSites() {
@@ -356,7 +404,10 @@ function parseBoxesFromZone(zoneId) {
         display_label: bId && bName ? `${bId}-${bName}` : (bId || bName)
       };
     });
-  } catch(e) { return []; }
+  } catch(e) {
+    writeDebugLog(`[JSON解析錯誤] parseBoxesFromZone 失敗, zoneId: ${zoneId}, 錯誤: ${e.message}, 內容: ${jsonString}`);
+    return [];
+  }
 }
 
 function parseShelvesFromBox(zoneId, boxId) {
@@ -378,7 +429,10 @@ function parseShelvesFromBox(zoneId, boxId) {
         name: shelf.name || "層格"
       };
     });
-  } catch(e) { return []; }
+  } catch(e) {
+    writeDebugLog(`[JSON解析錯誤] parseShelvesFromBox 失敗, zoneId: ${zoneId}, boxId: ${boxId}, 錯誤: ${e.message}, 內容: ${jsonString}`);
+    return [];
+  }
 }
 
 function getRawJsonString(zoneId) {
@@ -457,13 +511,18 @@ function processDualBinding(replyToken, lineUid, inputName, inputPhone) {
     return;
   }
 
-  let finalTarget = null;
-  for (let match of matchedRows) {
-    if (match.dbPhone && (match.dbPhone.endsWith(cleanInputPhone) || cleanInputPhone === match.dbPhone)) {
-      finalTarget = match;
-      break;
-    }
+  // 篩選出末碼比對相符或全碼完全相符的人員
+  const matchedPhones = matchedRows.filter(m => 
+    m.dbPhone && (m.dbPhone.endsWith(cleanInputPhone) || cleanInputPhone === m.dbPhone)
+  );
+
+  // ⚠️ 碰撞防禦：若同名志工輸入末 4 碼命中多於 1 筆，要求輸入完整 10 碼電話
+  if (matchedPhones.length > 1 && cleanInputPhone.length < 10) {
+    replyTextMessage(replyToken, `⚠️ 檢測到有同名且末碼相同的志工資料，為確保帳號安全，請在對話框中直接輸入您的【完整 10 碼手機號碼】：`);
+    return;
   }
+
+  const finalTarget = matchedPhones.length > 0 ? matchedPhones[0] : null;
 
   if (!finalTarget) {
     replyTextMessage(replyToken, `⚠️ 驗證失敗：您輸入的手機號碼與後台登記的資料不符，請重新點選「身份綁定」或聯繫管理員核對資料。`);
@@ -476,10 +535,18 @@ function processDualBinding(replyToken, lineUid, inputName, inputPhone) {
     return;
   }
 
-  sheet.getRange(finalTarget.rowIndex, uidIdx + 1).setValue(lineUid);
-  CacheService.getUserCache().remove(lineUid);
-  
-  replyTextMessage(replyToken, `🎉 志工身份認證成功！\n\n歡迎 ${inputName} (編號: ${finalTarget.userId})！已為您開通盤點權限。\n\n請點擊圖文選單的「📷 開始盤點」即可開始作業囉！🙏`);
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(10000);
+    sheet.getRange(finalTarget.rowIndex, uidIdx + 1).setValue(lineUid);
+    CacheService.getUserCache().remove(lineUid);
+    replyTextMessage(replyToken, `🎉 志工身份認證成功！\n\n歡迎 ${inputName} (編號: ${finalTarget.userId})！已為您開通盤點權限。\n\n請點擊圖文選單的「📷 開始盤點」即可開始作業囉！🙏`);
+  } catch (e) {
+    writeDebugLog("processDualBinding 寫入 LINE_UID 失敗: " + e.message);
+    replyTextMessage(replyToken, "❌ 系統忙碌中，請稍後重新嘗試綁定。");
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 function findSKU(keyword) {
