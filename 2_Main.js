@@ -13,18 +13,35 @@ function doPost(e) {
     if (events && events.length > 0) {
       const event = events[0];
       
+      // 攔截無效 ReplyToken
       if (event.replyToken === "00000000000000000000000000000000" || event.replyToken === "ffffffffffffffffffffffffffffffff") {
         return HtmlService.createHtmlOutput("OK");
       }
 
+      // 攔截 LINE Webhook 重複傳送
       if (event.deliveryContext && event.deliveryContext.isRedelivery === true) {
         return HtmlService.createHtmlOutput("OK");
       }
 
+      // 圖片/文字訊息去重防護 (TTL: 60s)
+      if (event.message && event.message.id) {
+        const cache = CacheService.getUserCache();
+        const msgKey = "PROCESSED_MSG_" + event.message.id;
+        if (cache.get(msgKey)) {
+          return HtmlService.createHtmlOutput("OK");
+        }
+        cache.put(msgKey, "1", 60);
+      }
+
       writeDebugLog(e.postData.contents);
 
-      if (event.type === 'message' && event.message && event.message.type === 'text') {
-        handleLineMessage(event);
+      // 分流處理文字與圖片訊息
+      if (event.type === 'message' && event.message) {
+        if (event.message.type === 'text') {
+          handleLineMessage(event);
+        } else if (event.message.type === 'image') {
+          handleLineImageMessage(event);
+        }
       }
     }
   } catch (error) {
@@ -32,6 +49,61 @@ function doPost(e) {
   }
   
   return HtmlService.createHtmlOutput("OK");
+}
+
+// ==================== 圖片訊息處理入口 ====================
+function handleLineImageMessage(event) {
+  const replyToken = event.replyToken;
+  const lineUid = event.source.userId;
+  const messageId = event.message.id;
+
+  const cache = CacheService.getUserCache();
+  const cachedState = cache.get(lineUid);
+
+  let currentVolunteer = getVolunteerByLineUid(lineUid);
+  if (!currentVolunteer) {
+    replyTextMessage(replyToken, "⚠️ 請先點選「身份綁定」完成認證後，再使用拍照入庫功能。");
+    return;
+  }
+
+  if (!cachedState) {
+    replyTextMessage(replyToken, "💡 若要進行物資建檔，請先在選單點擊「📸 拍照入庫」或輸入「拍照入庫」啟動入庫流程。");
+    return;
+  }
+
+  const session = JSON.parse(cachedState);
+
+  // 僅在等待照片狀態下處理圖片
+  if (session.state === 'STATE_INBOUND_WAIT_PHOTO') {
+    replyTextMessage(replyToken, "⏳ 收到照片！系統正在進行安全儲存與 AI 辨識中，請稍候約 3~5 秒...");
+
+    // 1. 抓取 LINE 圖片串流並儲存至 Drive (取得檢視 URL)
+    const imageInfo = saveLineImageToDrive(messageId, currentVolunteer['人員編號']);
+    if (!imageInfo.success) {
+      replyTextMessage(replyToken, `❌ 圖片存檔失敗：${imageInfo.message}。請重新拍照上傳。`);
+      return;
+    }
+
+    // 2. 調用 Gemini Vision API
+    const aiResult = callGeminiVisionAnalyze(imageInfo.blob);
+
+    session.tempImageUrl = imageInfo.viewUrl;
+    session.tempFileId = imageInfo.fileId;
+    session.aiParsedName = aiResult.itemName || "";
+    session.aiParsedCategory = aiResult.category || "一般物資";
+    session.aiParsedIsbn = aiResult.isbn || "";
+    session.state = 'STATE_INBOUND_CONFIRM_AI';
+    cache.put(lineUid, JSON.stringify(session), 1200);
+
+    // 3. 推播辨識結果卡片
+    if (!session.aiParsedName) {
+      replyFlexAiFailureCard(replyToken, session.tempImageUrl);
+    } else {
+      replyFlexAiInboundCard(replyToken, session.aiParsedName, session.aiParsedCategory, session.aiParsedIsbn, session.tempImageUrl);
+    }
+  } else {
+    replyTextMessage(replyToken, "💡 目前步驟非照片上傳狀態。如需拍照入庫，請點擊選單「📸 拍照入庫」。");
+  }
 }
 
 // ==================== LINE 狀態機引導邏輯 ====================
@@ -79,7 +151,7 @@ function handleLineMessage(event) {
 
   // 👤 點擊圖文選單的「身份綁定」
   if (userMessage === '綁定身份') {
-    replyTextMessage(replyToken, `💡 溫馨提醒：\n${myName} 您好，您已完成志工身份認證！\n\n編號：[${myUserId}]\n單位：${myDept}\n職稱：${myTitle}\n\n您的盤點權限已開通，不需重複認證。請直接點選下方「📷 開始盤點」即可開始作業囉！🙏`);
+    replyTextMessage(replyToken, `💡 溫馨提醒：\n${myName} 您好，您已完成志工身份認證！\n\n編號：[${myUserId}]\n單位：${myDept}\n職稱：${myTitle}\n\n您的權限已開通，請點選「📸 拍照入庫」或「📷 開始盤點」進行作業！🙏`);
     return;
   }
 
@@ -93,6 +165,36 @@ function handleLineMessage(event) {
   if (userMessage === CMD_EXIT_STOCKTAKE || userMessage === '結束盤點') {
     cache.remove(lineUid);
     replyExitStocktakeWithImage(replyToken, myName);
+    return;
+  }
+
+  // 📸 獨立觸發「拍照入庫」
+  if (userMessage === '拍照入庫' || userMessage === CMD_TRIGGER_PHOTO_INBOUND) {
+    const session = cachedState ? JSON.parse(cachedState) : {};
+    
+    // 如果志工是在盤點狀態下觸發拍照入庫，封存目前格位上下文
+    if (session.state === 'STATE_INPUT_SKU' || session.state === 'STATE_CONFIRM_CREATE_SKU') {
+      session.originContext = {
+        isFromStocktake: true,
+        siteName: session.siteName,
+        floorName: session.floorName,
+        locId: session.locId,
+        spaceName: session.spaceName,
+        zoneId: session.zoneId,
+        zoneName: session.zoneName,
+        boxId: session.boxId,
+        boxName: session.boxName,
+        shelfName: session.shelfName,
+        cellCode: session.cellCode
+      };
+    } else {
+      session.originContext = null;
+    }
+
+    session.state = 'STATE_INBOUND_WAIT_PHOTO';
+    cache.put(lineUid, JSON.stringify(session), 1200);
+
+    replyFlexInboundPromptCard(replyToken, session.originContext);
     return;
   }
 
@@ -129,18 +231,15 @@ function handleLineMessage(event) {
     case 'STATE_CHOOSE_SITE':
       const selectedSite = userMessage;
       const floors = getFloorsBySite(selectedSite);
-      
       if (floors.length === 0) {
         const sites = getAllSites();
         const menuItems = sites.map(s => ({ title: s, desc: "點擊進入此據點", value: s }));
         replyFlexMenuCard(replyToken, "⚠️ 查無樓層", `找不到「${selectedSite}」底下的樓層配置，請重新選擇據點：`, menuItems, null);
         return;
       }
-      
       session.state = 'STATE_CHOOSE_FLOOR';
       session.siteName = selectedSite;
       cache.put(lineUid, JSON.stringify(session), 1200);
-      
       const floorItems = floors.map(f => ({ title: f, desc: `${selectedSite} ${f}`, value: f }));
       replyFlexMenuCard(replyToken, "🏛️ 選擇所在樓層", `已選擇據點：${selectedSite}\n請點選所在【樓層】：`, floorItems, `↩️ 返回 [選擇據點]`);
       break;
@@ -149,18 +248,15 @@ function handleLineMessage(event) {
     case 'STATE_CHOOSE_FLOOR':
       const selectedFloor = userMessage;
       const details = getDetailsBySiteAndFloor(session.siteName, selectedFloor);
-      
       if (details.length === 0) {
         const floorsInSite = getFloorsBySite(session.siteName || "");
         const floorItems = floorsInSite.map(f => ({ title: f, desc: `${session.siteName} ${f}`, value: f }));
         replyFlexMenuCard(replyToken, "⚠️ 查無空間", `找不到「${session.siteName} ${selectedFloor}」的空間配置，請重新選擇樓層：`, floorItems, `↩️ 返回 [選擇據點]`);
         return;
       }
-      
       session.state = 'STATE_CHOOSE_LOC';
       session.floorName = selectedFloor;
       cache.put(lineUid, JSON.stringify(session), 1200);
-      
       const spaceItems = details.map(d => ({ title: d.space_name, desc: `${session.siteName} ${selectedFloor} - ${d.space_name}`, value: d.loc_id }));
       replyFlexMenuCard(replyToken, "🏢 選擇具體空間", `已選擇：${session.siteName} ${selectedFloor}\n請點選具體【空間/展示區】：`, spaceItems, `↩️ 返回 [${session.siteName} 樓層]`);
       break;
@@ -169,22 +265,18 @@ function handleLineMessage(event) {
     case 'STATE_CHOOSE_LOC':
       const locId = userMessage.toUpperCase();
       const zones = getZonesByLocation(locId); 
-      
       const currentLocInfo = getLocationInfoById(locId);
       const spaceName = currentLocInfo ? currentLocInfo.space_name : locId;
-      
       if (zones.length === 0) {
         const currentDetails = getDetailsBySiteAndFloor(session.siteName || "", session.floorName || "");
         const spaceItems = currentDetails.map(d => ({ title: d.space_name, desc: d.space_name, value: d.loc_id }));
         replyFlexMenuCard(replyToken, "⚠️ 查無櫃位", `找不到「${spaceName}」下的櫃位明細。請重新點選：`, spaceItems, `↩️ 返回 [${session.siteName} 樓層]`);
         return;
       }
-      
       session.state = 'STATE_CHOOSE_ZONE';
       session.locId = locId;
       session.spaceName = spaceName;
       cache.put(lineUid, JSON.stringify(session), 1200);
-      
       const zoneItems = zones.map(z => ({ title: z.zone_name, desc: `${spaceName} - ${z.zone_name}`, value: z.zone_id }));
       replyFlexMenuCard(replyToken, "🗄️ 選擇櫃位區域", `已定位空間：【${spaceName}】\n請點選要盤點的【櫃位/區域】：`, zoneItems, `↩️ 返回 [${session.floorName || "樓層空間"}]`);
       break;
@@ -194,19 +286,16 @@ function handleLineMessage(event) {
       const zoneId = userMessage.toUpperCase();
       const boxes = parseBoxesFromZone(zoneId); 
       const zoneName = getZoneNameById(zoneId);
-      
       if (boxes.length === 0) {
         const currentZones = getZonesByLocation(session.locId || "");
         const zoneItems = currentZones.map(z => ({ title: z.zone_name, desc: z.zone_name, value: z.zone_id }));
         replyFlexMenuCard(replyToken, "❌ 查無櫃子", `找不到「${zoneName}」的空間配置。請重新點選：`, zoneItems, `↩️ 返回 [${session.spaceName || "空間清單"}]`);
         return;
       }
-      
       session.state = 'STATE_CHOOSE_BOX';
       session.zoneId = zoneId;
       session.zoneName = zoneName;
       cache.put(lineUid, JSON.stringify(session), 1200); 
-      
       const boxItems = boxes.map(b => ({ title: b.display_label, desc: `點擊進入 ${b.display_label}`, value: b.display_label }));
       replyFlexMenuCard(replyToken, "🗃️ 選擇盤點櫃子", `已鎖定：【${zoneName}】\n請點選要盤點的【櫃子】：`, boxItems, `↩️ 返回 [${session.spaceName || "空間清單"}]`);
       break;
@@ -216,19 +305,16 @@ function handleLineMessage(event) {
       const selectedBoxStr = userMessage;
       const selectedBoxId = selectedBoxStr.split('-')[0].toUpperCase().trim();
       const shelves = parseShelvesFromBox(session.zoneId, selectedBoxId); 
-      
       if (shelves.length === 0) {
         const boxes = parseBoxesFromZone(session.zoneId);
         const boxItems = boxes.map(b => ({ title: b.display_label, desc: b.display_label, value: b.display_label }));
         replyFlexMenuCard(replyToken, "❌ 查無層格", `找不到該櫃子配置，請重新選擇櫃子：`, boxItems, `↩️ 返回 [${session.zoneName || "櫃位分區"}]`);
         return;
       }
-      
       session.state = 'STATE_CHOOSE_CELL';
       session.boxId = selectedBoxId;
       session.boxName = selectedBoxStr;
       cache.put(lineUid, JSON.stringify(session), 1200);
-      
       const shelfItems = shelves.map(s => ({ title: `📍 ${s.name}`, desc: `格位：${s.short_code}`, value: s.cell_code }));
       replyFlexMenuCard(replyToken, "🚪 選擇盤點層格", `已對齊櫃體：【${selectedBoxStr}】\n請點選具體【層格】：`, shelfItems, `↩️ 返回 [${session.zoneName || "櫃位分區"}]`);
       break;
@@ -236,10 +322,8 @@ function handleLineMessage(event) {
     // 📍 狀態 4：鎖定層格 ➔ 呈現定位卡片
     case 'STATE_CHOOSE_CELL':
       let cellCode = userMessage.toUpperCase().trim();
-      
       const validShelves = parseShelvesFromBox(session.zoneId, session.boxId);
       const matchedShelf = validShelves.find(s => s.cell_code.toUpperCase().trim() === cellCode);
-      
       if (!matchedShelf) {
         if (validShelves.length > 0) {
           const shelfItems = validShelves.map(s => ({ title: `📍 ${s.name}`, desc: `格位：${s.short_code}`, value: s.cell_code }));
@@ -249,25 +333,23 @@ function handleLineMessage(event) {
         }
         return;
       }
-      
       session.state = 'STATE_INPUT_SKU';
       session.cellCode = cellCode;
       session.shelfName = matchedShelf.name;
       cache.put(lineUid, JSON.stringify(session), 1200);
-      
       replyFlexSearchPromptCard(replyToken, session.spaceName, session.boxName, matchedShelf.name, cellCode, false);
       break;
       
-    // 📦 狀態 5：搜尋物資 (SKU)
+    // 📦 狀態 5：搜尋在庫物資 (僅允許點選在庫品項，若無則引導拍照入庫)
     case 'STATE_INPUT_SKU':
       const skus = findSKU(userMessage);
       session.pendingItemName = userMessage;
       
       if (skus.length === 0) {
+        // 🌟 嚴格防呆阻斷：無品項時不允許隨意盲打文字建檔，引導拍照入庫
         session.state = 'STATE_CONFIRM_CREATE_SKU';
         cache.put(lineUid, JSON.stringify(session), 1200);
-
-        replyFlexCreateSkuCard(replyToken, userMessage);
+        replyFlexNoSkuPromptPhotoCard(replyToken, userMessage);
         return;
       }
       
@@ -287,18 +369,25 @@ function handleLineMessage(event) {
       replyFlexSkuCard(replyToken, session.itemName, session.skuId, cateName, userMessage);
       break;  
 
-    // ➕ 狀態 5.5：確認建檔選擇分流
+    // 📸 狀態 5.5：查無品項引導確認分流
     case 'STATE_CONFIRM_CREATE_SKU':
-      if (userMessage === CMD_CREATE_SKU_CONFIRM) {
-        const newItemName = session.pendingItemName;
-        executeCreateSkuAndProceed(replyToken, lineUid, session, newItemName);
-        return;
-      }
-
-      if (userMessage === CMD_INPUT_DETAILED_SKU) {
-        session.state = 'STATE_INPUT_FULL_SKU_NAME';
+      if (userMessage === CMD_TRIGGER_PHOTO_INBOUND) {
+        session.originContext = {
+          isFromStocktake: true,
+          siteName: session.siteName,
+          floorName: session.floorName,
+          locId: session.locId,
+          spaceName: session.spaceName,
+          zoneId: session.zoneId,
+          zoneName: session.zoneName,
+          boxId: session.boxId,
+          boxName: session.boxName,
+          shelfName: session.shelfName,
+          cellCode: session.cellCode
+        };
+        session.state = 'STATE_INBOUND_WAIT_PHOTO';
         cache.put(lineUid, JSON.stringify(session), 1200);
-        replyTextMessage(replyToken, `✏️ 請在對話框中直接輸入【完整品項名稱與規格】：\n(例如：金剛經講記-智慧之光)`);
+        replyFlexInboundPromptCard(replyToken, session.originContext);
         return;
       }
 
@@ -313,9 +402,19 @@ function handleLineMessage(event) {
       handleLineMessage(event);
       break;
 
-    // 📝 狀態 5.6：收到志工輸入的「完整品項名稱」
-    case 'STATE_INPUT_FULL_SKU_NAME':
-      executeCreateSkuAndProceed(replyToken, lineUid, session, userMessage);
+    // 📸 狀態 9-A：等待入庫照片中（志工傳入文字提示防呆）
+    case 'STATE_INBOUND_WAIT_PHOTO':
+      replyTextMessage(replyToken, "📷 系統目前等待您上傳物資封面或標籤的照片。\n\n請直接點選 LINE 相機拍照傳送。若要取消，請輸入「結束盤點」或點擊返回。");
+      break;
+
+    // 📸 狀態 9-B：手動修正 AI 辨識品名
+    case 'STATE_INBOUND_EDIT_NAME':
+      const manualName = userMessage.trim();
+      if (!manualName) {
+        replyTextMessage(replyToken, "❌ 品名不得為空，請輸入正確的物品名稱：");
+        return;
+      }
+      finalizeInboundSku(replyToken, lineUid, session, currentVolunteer, manualName, session.aiParsedCategory || "一般物資", session.aiParsedIsbn || "", session.tempImageUrl || "");
       break;
 
     // 🔢 狀態 6：輸入實清數量並獨立更新該格位庫存
@@ -351,7 +450,6 @@ function handleLineMessage(event) {
     case 'STATE_CORRECT_ITEM_NAME':
       const newCorrectName = userMessage;
       correctLastItemName(session.lastSkuId, newCorrectName, session.cellCode);
-      
       session.lastItemName = newCorrectName;
       session.itemName = newCorrectName;
       session.state = 'STATE_POST_STOCKTAKE';
@@ -370,7 +468,6 @@ function handleLineMessage(event) {
       }
 
       correctLastQty(session.cellCode, session.lastSkuId, newCorrectQty);
-      
       session.lastQty = newCorrectQty;
       session.state = 'STATE_POST_STOCKTAKE';
       cache.put(lineUid, JSON.stringify(session), 1800);
@@ -383,5 +480,50 @@ function handleLineMessage(event) {
     case 'STATE_POST_STOCKTAKE':
       handleSystemCommand(replyToken, lineUid, session, userMessage, myName);
       break;
+  }
+}
+
+// ==================== 入庫建檔確認並判定是否無縫回跳 ====================
+function finalizeInboundSku(replyToken, lineUid, session, currentVolunteer, itemName, category, isbn, imageUrl) {
+  const cache = CacheService.getUserCache();
+  const userId = currentVolunteer['人員編號'];
+
+  // 1. 寫入 SKU_MASTER (純零庫存建檔)
+  const result = createInboundSkuOnly(itemName, category, isbn, imageUrl, userId);
+  if (!result.success) {
+    replyTextMessage(replyToken, `❌ 入庫建檔失敗：${result.message}`);
+    return;
+  }
+
+  // 2. 判斷是否有盤點上下文 (originContext) 需要接續
+  if (session.originContext && session.originContext.isFromStocktake) {
+    const origin = session.originContext;
+    session.siteName = origin.siteName;
+    session.floorName = origin.floorName;
+    session.locId = origin.locId;
+    session.spaceName = origin.spaceName;
+    session.zoneId = origin.zoneId;
+    session.zoneName = origin.zoneName;
+    session.boxId = origin.boxId;
+    session.boxName = origin.boxName;
+    session.shelfName = origin.shelfName;
+    session.cellCode = origin.cellCode;
+
+    // 接續點數流程
+    session.state = 'STATE_INPUT_QTY';
+    session.skuId = result.skuId;
+    session.itemName = result.itemName;
+    session.originContext = null; 
+    cache.put(lineUid, JSON.stringify(session), 1200);
+
+    const tipMsg = result.isExisting
+      ? `💡 系統已有相同品項【${result.itemName}】(${result.skuId})，已為您自動關聯！`
+      : `🎉 新品項入庫建檔完成！編號：${result.skuId}`;
+
+    replyTextMessage(replyToken, `${tipMsg}\n\n📍 系統已為您自動保留儲位：\n【${origin.spaceName} ｜ ${origin.boxName} - ${origin.shelfName}】\n\n請直接輸入該物品在此格位的【實清數量】數字（如：5）：`);
+  } else {
+    // 獨立入庫完成，清空會話返回首頁
+    cache.remove(lineUid);
+    replyFlexInboundSuccessCard(replyToken, result.itemName, result.skuId, result.cateName, imageUrl);
   }
 }
