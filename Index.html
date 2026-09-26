@@ -72,26 +72,41 @@
     <script>
       let categoryList = [];
 
-      // 頁面初始化：載入 CATEGORY_MASTER 清單
+    // 頁面初始化：載入 CATEGORY_MASTER 清單
       window.onload = function() {
+        const select = document.getElementById('categorySelect');
+        
         google.script.run
           .withSuccessHandler(function(list) {
-            categoryList = list;
-            const select = document.getElementById('categorySelect');
             select.innerHTML = '';
 
             if (!list || list.length === 0) {
-              select.innerHTML = '<option value="">未設定大類清單</option>';
+              select.innerHTML = '<option value="">⚠️ 找不到大類資料，請檢查試算表</option>';
               return;
             }
+
+            categoryList = list;
+            
+            // 預設先放一個請選擇提示
+            const defaultOpt = document.createElement('option');
+            defaultOpt.value = "";
+            defaultOpt.innerText = "請選擇物資大類...";
+            select.appendChild(defaultOpt);
 
             list.forEach(c => {
               const opt = document.createElement('option');
               opt.value = c.code;
               opt.innerText = `${c.name} (${c.code})`;
               opt.dataset.name = c.name;
+              // 預設選取書籍類 (H 出版品與佛藝書籍)
+              if (c.code === 'H' || c.name.includes('書籍')) {
+                opt.selected = true;
+              }
               select.appendChild(opt);
             });
+          })
+          .withFailureHandler(function(err) {
+            select.innerHTML = '<option value="">❌ 載入失敗: ' + (err.message || err) + '</option>';
           })
           .getCategoriesForFrontend();
       };

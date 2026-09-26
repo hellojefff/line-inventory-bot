@@ -13,31 +13,42 @@
 
 /**
  * 讀取 CATEGORY_MASTER 的所有大類清單
- * 回傳格式: [{ code: "BK", name: "書籍" }, ...]
+ * 支援合併儲存格、空列容錯與表頭定位
  */
 function getCategoryMasterList() {
-  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
-  const sheet = ss.getSheetByName("CATEGORY_MASTER");
-  if (!sheet) return [];
-
-  const data = sheet.getDataRange().getValues();
-  if (data.length <= 1) return [];
-
-  const headers = data[0];
-  const codeIdx = headers.indexOf('大類代碼');
-  const nameIdx = headers.indexOf('大類名稱');
-
-  if (codeIdx === -1 || nameIdx === -1) return [];
-
-  const list = [];
-  for (let i = 1; i < data.length; i++) {
-    const code = data[i][codeIdx] ? data[i][codeIdx].toString().trim() : "";
-    const name = data[i][nameIdx] ? data[i][nameIdx].toString().trim() : "";
-    if (code && name) {
-      list.push({ code: code, name: name });
+  try {
+    const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+    const sheet = ss.getSheetByName("CATEGORY_MASTER");
+    if (!sheet) {
+      writeDebugLog("[getCategoryMasterList] 找不到 CATEGORY_MASTER 工作表");
+      return [];
     }
+
+    const data = sheet.getDataRange().getValues();
+    if (data.length <= 1) return [];
+
+    const headers = data[0].map(h => h ? h.toString().trim() : "");
+    const codeIdx = headers.indexOf('大類代碼');
+    const nameIdx = headers.indexOf('大類名稱');
+
+    const effectiveCodeIdx = codeIdx !== -1 ? codeIdx : 0;
+    const effectiveNameIdx = nameIdx !== -1 ? nameIdx : 1;
+
+    const list = [];
+    for (let i = 1; i < data.length; i++) {
+      const code = data[i][effectiveCodeIdx] ? data[i][effectiveCodeIdx].toString().trim() : "";
+      const name = data[i][effectiveNameIdx] ? data[i][effectiveNameIdx].toString().trim() : "";
+      
+      // 只要兩者皆有值就收錄（避開說明欄跳行所產生的空列）
+      if (code && name) {
+        list.push({ code: code, name: name });
+      }
+    }
+    return list;
+  } catch (e) {
+    writeDebugLog("getCategoryMasterList 錯誤: " + e.message);
+    return [];
   }
-  return list;
 }
 
 /**
