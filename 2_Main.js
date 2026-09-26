@@ -51,6 +51,14 @@ function doPost(e) {
   return HtmlService.createHtmlOutput("OK");
 }
 
+// ==================== 網頁應用程式 (Web App) 進入點 ====================
+function doGet(e) {
+  return HtmlService.createTemplateFromFile('Index')
+    .evaluate()
+    .setTitle('覺風物資前置拍照建檔')
+    .addMetaTag('viewport', 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no')
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+}
 // ==================== 圖片訊息處理入口 ====================
 function handleLineImageMessage(event) {
   const replyToken = event.replyToken;
