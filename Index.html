@@ -20,8 +20,8 @@
       h2 { color: #065F46; margin-top: 0; font-size: 19px; }
       p.desc { font-size: 13px; color: #4B5563; margin-top: -6px; margin-bottom: 16px; line-height: 1.5; }
       label { display: block; font-weight: 600; margin-top: 14px; font-size: 14px; color: #374151; }
-      input[type="text"] {
-        width: 100%; padding: 12px; margin-top: 6px; border: 1px solid #D1D5DB; border-radius: 8px; box-sizing: border-box; font-size: 16px;
+      input[type="text"], select {
+        width: 100%; padding: 12px; margin-top: 6px; border: 1px solid #D1D5DB; border-radius: 8px; box-sizing: border-box; font-size: 16px; background-color: #FFFFFF;
       }
       .camera-trigger {
         display: block; background: #047857; color: white; text-align: center; padding: 14px; border-radius: 8px; font-size: 16px; font-weight: bold; margin-top: 10px; cursor: pointer;
@@ -56,7 +56,9 @@
         <input type="text" id="itemName" placeholder="拍照後自動辨識帶入">
 
         <label>物資大類：</label>
-        <input type="text" id="category" value="書籍" placeholder="例如：經書、佛學著作、文宣刊物">
+        <select id="categorySelect">
+          <option value="">載入大類選單中...</option>
+        </select>
 
         <label>ISBN / 條碼編號：</label>
         <input type="text" id="barcode" placeholder="選填，無條碼可留空">
@@ -68,6 +70,32 @@
     </div>
 
     <script>
+      let categoryList = [];
+
+      // 頁面初始化：載入 CATEGORY_MASTER 清單
+      window.onload = function() {
+        google.script.run
+          .withSuccessHandler(function(list) {
+            categoryList = list;
+            const select = document.getElementById('categorySelect');
+            select.innerHTML = '';
+
+            if (!list || list.length === 0) {
+              select.innerHTML = '<option value="">未設定大類清單</option>';
+              return;
+            }
+
+            list.forEach(c => {
+              const opt = document.createElement('option');
+              opt.value = c.code;
+              opt.innerText = `${c.name} (${c.code})`;
+              opt.dataset.name = c.name;
+              select.appendChild(opt);
+            });
+          })
+          .getCategoriesForFrontend();
+      };
+
       function showStatus(text, isSuccess) {
         const box = document.getElementById('statusBox');
         box.className = isSuccess ? 'status-box status-success' : 'status-box status-loading';
@@ -98,7 +126,14 @@
                 document.getElementById('uploadedImgUrl').value = res.imageUrl;
                 document.getElementById('itemName').value = res.recognizedName;
                 document.getElementById('barcode').value = res.barcode;
-                if (res.category) document.getElementById('category').value = res.category;
+
+                // 若 AI 辨識出分類，嘗試自動比對下拉選單
+                if (res.category && categoryList.length > 0) {
+                  const match = categoryList.find(c => c.name.includes(res.category) || res.category.includes(c.name));
+                  if (match) {
+                    document.getElementById('categorySelect').value = match.code;
+                  }
+                }
               } else {
                 showStatus('⚠️ 辨識提示：' + res.message + '，請直接手動輸入完整品名。', false);
               }
@@ -115,13 +150,19 @@
 
       function submitFinalSku() {
         const item = document.getElementById('itemName').value.trim();
-        const imgUrl = document.getElementById('uploadedImgUrl').value;
-        const category = document.getElementById('category').value.trim();
+        const select = document.getElementById('categorySelect');
+        const categoryCode = select.value;
+        const categoryName = select.options[select.selectedIndex] ? select.options[select.selectedIndex].dataset.name : "";
         const barcode = document.getElementById('barcode').value.trim();
+        const imgUrl = document.getElementById('uploadedImgUrl').value;
         const btn = document.getElementById('submitBtn');
 
         if (!item) {
           alert('請輸入或確認物資品名！');
+          return;
+        }
+        if (!categoryCode) {
+          alert('請選擇物資大類！');
           return;
         }
 
@@ -132,8 +173,9 @@
           .withSuccessHandler(function(res) {
             if (res.success) {
               const tip = res.isExisting ? '⚠️ 提醒：此品項已存在主檔，已為您補齊封面！\n' : '🎉 新品項建檔成功！\n';
-              alert(tip + '物資編號：' + res.skuId + '\n品名：' + res.itemName + '\n分類：' + res.cateName);
+              alert(tip + '品項編號：' + res.skuId + '\n品名：' + res.itemName + '\n大類：' + res.cateName + ' (' + res.categoryCode + ')');
               
+              // 重置表單準備登記下一件
               document.getElementById('itemName').value = '';
               document.getElementById('barcode').value = '';
               document.getElementById('previewImg').style.display = 'none';
@@ -150,7 +192,7 @@
             btn.disabled = false;
             btn.innerText = '💾 確認並建立物資主檔';
           })
-          .submitConfirmedSkuMaster(item, imgUrl, category, barcode);
+          .submitConfirmedSkuMaster(item, categoryCode, categoryName, imgUrl, barcode);
       }
     </script>
   </body>

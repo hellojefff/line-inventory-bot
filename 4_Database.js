@@ -1,15 +1,56 @@
 /**
  * 模組 4：資料庫與試算表操作層 (4_Database.js)
+ * 核心功能：
+ * 1. 零庫存前置建檔 (嚴格僅寫入 SKU_MASTER，依大類代碼生成前綴流水號)
+ * 2. 讀取 CATEGORY_MASTER 提供網頁大類下拉選單
+ * 3. 獨立格位庫存盤點與補救更正機制 (LockService 防併發)
+ * 4. 據點、空間、櫃位、層格之階層結構查詢與志工雙重認證
  */
 
+// ==============================================================================
+// 🌟 零庫存前置建檔模組 (純主檔作業)
+// ==============================================================================
+
 /**
- * 🌟 零庫存前置物資建檔專用函式
+ * 讀取 CATEGORY_MASTER 的所有大類清單
+ * 回傳格式: [{ code: "BK", name: "書籍" }, ...]
+ */
+function getCategoryMasterList() {
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const sheet = ss.getSheetByName("CATEGORY_MASTER");
+  if (!sheet) return [];
+
+  const data = sheet.getDataRange().getValues();
+  if (data.length <= 1) return [];
+
+  const headers = data[0];
+  const codeIdx = headers.indexOf('大類代碼');
+  const nameIdx = headers.indexOf('大類名稱');
+
+  if (codeIdx === -1 || nameIdx === -1) return [];
+
+  const list = [];
+  for (let i = 1; i < data.length; i++) {
+    const code = data[i][codeIdx] ? data[i][codeIdx].toString().trim() : "";
+    const name = data[i][nameIdx] ? data[i][nameIdx].toString().trim() : "";
+    if (code && name) {
+      list.push({ code: code, name: name });
+    }
+  }
+  return list;
+}
+
+/**
+ * 零庫存前置建檔：依大類代碼生成流水號並寫入 SKU_MASTER
  * 嚴格只寫入 SKU_MASTER，絕不更新 CURRENT_STOCK 或寫入 STOCKTAKE_LOG
  */
-function createPreStockSkuMasterOnly(itemName, imageUrl = "", cateName = "一般物資", barcode = "") {
+function createPreStockSkuMasterWithCategory(itemName, categoryCode, categoryName, imageUrl = "", barcode = "") {
   const cleanName = itemName.trim();
   if (!cleanName) {
     return { success: false, message: "品項名稱不得為空" };
+  }
+  if (!categoryCode || !categoryName) {
+    return { success: false, message: "請選擇正確的物資大類" };
   }
 
   const lock = LockService.getScriptLock();
@@ -25,7 +66,8 @@ function createPreStockSkuMasterOnly(itemName, imageUrl = "", cateName = "一般
     const headers = data[0];
     const skuIdIdx = headers.indexOf('品項編號');
     const itemNameIdx = headers.indexOf('物品名稱');
-    const cateIdx = headers.indexOf('大類');
+    const cateNameIdx = headers.indexOf('大類名稱') !== -1 ? headers.indexOf('大類名稱') : headers.indexOf('大類');
+    const cateCodeIdx = headers.indexOf('大類代碼');
     const barcodeIdx = headers.indexOf('ISBN/條碼');
     const imgIdx = headers.indexOf('封面圖片URL');
 
@@ -33,11 +75,12 @@ function createPreStockSkuMasterOnly(itemName, imageUrl = "", cateName = "一般
       return { success: false, message: "SKU_MASTER 缺少必要欄位 (品項編號 / 物品名稱)" };
     }
 
-    // 查重比對：若已有完全同名品項，直接返回既有資料，並在缺少圖片時補齊封面
+    // 1. 查重比對：品名完全相同者避免重複建檔
     const normalizedTarget = cleanName.replace(/\s+/g, "").toLowerCase();
     for (let i = 1; i < data.length; i++) {
       const existingName = data[i][itemNameIdx] ? data[i][itemNameIdx].toString().replace(/\s+/g, "").toLowerCase() : "";
       if (existingName === normalizedTarget) {
+        // 若已存在但原本無圖片，則補齊封面
         if (imgIdx !== -1 && !data[i][imgIdx] && imageUrl) {
           sheet.getRange(i + 1, imgIdx + 1).setValue(imageUrl);
         }
@@ -45,21 +88,39 @@ function createPreStockSkuMasterOnly(itemName, imageUrl = "", cateName = "一般
           success: true,
           skuId: data[i][skuIdIdx].toString(),
           itemName: data[i][itemNameIdx].toString(),
-          cateName: (cateIdx !== -1 && data[i][cateIdx]) ? data[i][cateIdx].toString() : "一般物資",
-          barcode: (barcodeIdx !== -1 && data[i][barcodeIdx]) ? data[i][barcodeIdx].toString() : "",
-          imageUrl: (imgIdx !== -1 && data[i][imgIdx]) ? data[i][imgIdx].toString() : imageUrl,
+          cateName: cateNameIdx !== -1 ? data[i][cateNameIdx].toString() : categoryName,
+          categoryCode: cateCodeIdx !== -1 ? data[i][cateCodeIdx].toString() : categoryCode,
+          barcode: barcodeIdx !== -1 ? data[i][barcodeIdx].toString() : "",
+          imageUrl: imgIdx !== -1 ? data[i][imgIdx].toString() : imageUrl,
           isExisting: true
         };
       }
     }
 
-    // 派發新流水號 (SKU-xxx)
-    const newSkuId = 'SKU-' + String(data.length).padStart(3, '0');
+    // 2. 依【大類代碼】計算流水號（格式如：BK-001 或 B-001）
+    let maxSerial = 0;
+    const prefix = categoryCode.toUpperCase().trim() + '-';
+
+    for (let i = 1; i < data.length; i++) {
+      const currentSku = data[i][skuIdIdx] ? data[i][skuIdIdx].toString().trim().toUpperCase() : "";
+      if (currentSku.startsWith(prefix)) {
+        const numPart = currentSku.replace(prefix, "");
+        const parsedNum = parseInt(numPart, 10);
+        if (!isNaN(parsedNum) && parsedNum > maxSerial) {
+          maxSerial = parsedNum;
+        }
+      }
+    }
+
+    const nextSerial = maxSerial + 1;
+    const newSkuId = prefix + String(nextSerial).padStart(3, '0');
+
+    // 3. 寫入 SKU_MASTER 主檔
     const newRow = new Array(headers.length).fill("");
-    
     newRow[skuIdIdx] = newSkuId;
     newRow[itemNameIdx] = cleanName;
-    if (cateIdx !== -1) newRow[cateIdx] = cateName || "一般物資";
+    if (cateCodeIdx !== -1) newRow[cateCodeIdx] = categoryCode;
+    if (cateNameIdx !== -1) newRow[cateNameIdx] = categoryName;
     if (barcodeIdx !== -1) newRow[barcodeIdx] = barcode || "";
     if (imgIdx !== -1) newRow[imgIdx] = imageUrl || "";
 
@@ -69,18 +130,23 @@ function createPreStockSkuMasterOnly(itemName, imageUrl = "", cateName = "一般
       success: true,
       skuId: newSkuId,
       itemName: cleanName,
-      cateName: cateName || "一般物資",
+      cateName: categoryName,
+      categoryCode: categoryCode,
       barcode: barcode || "",
       imageUrl: imageUrl,
       isExisting: false
     };
   } catch (e) {
-    writeDebugLog("createPreStockSkuMasterOnly 執行失敗: " + e.message);
+    writeDebugLog("createPreStockSkuMasterWithCategory 失敗: " + e.message);
     return { success: false, message: "建檔失敗: " + e.message };
   } finally {
     lock.releaseLock();
   }
 }
+
+// ==============================================================================
+// 📦 格位盤點核心業務模組
+// ==============================================================================
 
 function executeUpdateStockWorkflow(userId, cellCode, skuId, itemName, qty) {
   if (!validateStocktakeRelations(userId, skuId)) {
@@ -93,6 +159,7 @@ function executeUpdateStockWorkflow(userId, cellCode, skuId, itemName, qty) {
 
     const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
     
+    // 1. 寫入歷史日誌表 STOCKTAKE_LOG
     let logSheet = ss.getSheetByName("STOCKTAKE_LOG");
     if (!logSheet) {
       logSheet = ss.insertSheet("STOCKTAKE_LOG");
@@ -101,6 +168,7 @@ function executeUpdateStockWorkflow(userId, cellCode, skuId, itemName, qty) {
     const nextLogId = 'LOG-' + String(logSheet.getLastRow()).padStart(3, '0');
     logSheet.appendRow([nextLogId, new Date(), userId, cellCode, skuId, itemName, qty]);
 
+    // 2. 更新當前庫存表 CURRENT_STOCK (模式 1：依 cellCode + skuId 獨立更新)
     let stockSheet = ss.getSheetByName("CURRENT_STOCK");
     if (!stockSheet) {
       stockSheet = ss.insertSheet("CURRENT_STOCK");
@@ -258,9 +326,9 @@ function deleteLastRecord(cellCode, skuId) {
   }
 }
 
-function createAndGetNewSKU(itemName) {
-  return createPreStockSkuMasterOnly(itemName);
-}
+// ==============================================================================
+// 🏛️ 儲位層級查詢模組 (據點 ➔ 樓層 ➔ 空間 ➔ 櫃位 ➔ 層格)
+// ==============================================================================
 
 function getAllSites() {
   const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
@@ -461,6 +529,10 @@ function getRawJsonString(zoneId) {
   }
   return "";
 }
+
+// ==============================================================================
+// 👤 志工身分與安全認證模組
+// ==============================================================================
 
 function getVolunteerByLineUid(lineUid) {
   const ss = SpreadsheetApp.openById(SPREADSHEET_ID);

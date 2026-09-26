@@ -59,6 +59,27 @@ function doGet(e) {
     .addMetaTag('viewport', 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
+
+
+// 提供前端載入下拉選單使用
+function getCategoriesForFrontend() {
+  try {
+    return getCategoryMasterList();
+  } catch (e) {
+    writeDebugLog("getCategoriesForFrontend 失敗: " + e.message);
+    return [];
+  }
+}
+
+/**
+ * 前端確認後呼叫建檔
+ */
+function submitConfirmedSkuMaster(itemName, categoryCode, categoryName, imageUrl, barcode) {
+  return createPreStockSkuMasterWithCategory(itemName, categoryCode, categoryName, imageUrl, barcode);
+}
+
+
+
 // ==================== 圖片訊息處理入口 ====================
 function handleLineImageMessage(event) {
   const replyToken = event.replyToken;
@@ -490,6 +511,141 @@ function handleLineMessage(event) {
       break;
   }
 }
+
+
+/**
+ * 讀取 CATEGORY_MASTER 的所有大類清單
+ * 回傳格式: [{ code: "BK", name: "書籍" }, ...]
+ */
+function getCategoryMasterList() {
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const sheet = ss.getSheetByName("CATEGORY_MASTER");
+  if (!sheet) return [];
+
+  const data = sheet.getDataRange().getValues();
+  if (data.length <= 1) return [];
+
+  const headers = data[0];
+  const codeIdx = headers.indexOf('大類代碼');
+  const nameIdx = headers.indexOf('大類名稱');
+
+  if (codeIdx === -1 || nameIdx === -1) return [];
+
+  const list = [];
+  for (let i = 1; i < data.length; i++) {
+    const code = data[i][codeIdx] ? data[i][codeIdx].toString().trim() : "";
+    const name = data[i][nameIdx] ? data[i][nameIdx].toString().trim() : "";
+    if (code && name) {
+      list.push({ code: code, name: name });
+    }
+  }
+  return list;
+}
+
+/**
+ * 🌟 零庫存前置建檔：依大類代碼生成流水號並寫入 SKU_MASTER
+ */
+function createPreStockSkuMasterWithCategory(itemName, categoryCode, categoryName, imageUrl = "", barcode = "") {
+  const cleanName = itemName.trim();
+  if (!cleanName) {
+    return { success: false, message: "品項名稱不得為空" };
+  }
+  if (!categoryCode || !categoryName) {
+    return { success: false, message: "請選擇正確的物資大類" };
+  }
+
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(10000);
+    const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+    const sheet = ss.getSheetByName("SKU_MASTER");
+    if (!sheet) {
+      return { success: false, message: "找不到 SKU_MASTER 資料表" };
+    }
+
+    const data = sheet.getDataRange().getValues();
+    const headers = data[0];
+    const skuIdIdx = headers.indexOf('品項編號');
+    const itemNameIdx = headers.indexOf('物品名稱');
+    const cateNameIdx = headers.indexOf('大類名稱') !== -1 ? headers.indexOf('大類名稱') : headers.indexOf('大類');
+    const cateCodeIdx = headers.indexOf('大類代碼');
+    const barcodeIdx = headers.indexOf('ISBN/條碼');
+    const imgIdx = headers.indexOf('封面圖片URL');
+
+    if (skuIdIdx === -1 || itemNameIdx === -1) {
+      return { success: false, message: "SKU_MASTER 缺少必要欄位 (品項編號 / 物品名稱)" };
+    }
+
+    // 1. 查重比對：品名完全相同者避免重複建檔
+    const normalizedTarget = cleanName.replace(/\s+/g, "").toLowerCase();
+    for (let i = 1; i < data.length; i++) {
+      const existingName = data[i][itemNameIdx] ? data[i][itemNameIdx].toString().replace(/\s+/g, "").toLowerCase() : "";
+      if (existingName === normalizedTarget) {
+        if (imgIdx !== -1 && !data[i][imgIdx] && imageUrl) {
+          sheet.getRange(i + 1, imgIdx + 1).setValue(imageUrl);
+        }
+        return {
+          success: true,
+          skuId: data[i][skuIdIdx].toString(),
+          itemName: data[i][itemNameIdx].toString(),
+          cateName: cateNameIdx !== -1 ? data[i][cateNameIdx].toString() : categoryName,
+          categoryCode: cateCodeIdx !== -1 ? data[i][cateCodeIdx].toString() : categoryCode,
+          barcode: barcodeIdx !== -1 ? data[i][barcodeIdx].toString() : "",
+          imageUrl: imgIdx !== -1 ? data[i][imgIdx].toString() : imageUrl,
+          isExisting: true
+        };
+      }
+    }
+
+    // 2. 依【大類代碼】計算流水號（格式如：BK-001 或 B-001）
+    let maxSerial = 0;
+    const prefix = categoryCode.toUpperCase().trim() + '-';
+
+    for (let i = 1; i < data.length; i++) {
+      const currentSku = data[i][skuIdIdx] ? data[i][skuIdIdx].toString().trim().toUpperCase() : "";
+      if (currentSku.startsWith(prefix)) {
+        const numPart = currentSku.replace(prefix, "");
+        const parsedNum = parseInt(numPart, 10);
+        if (!isNaN(parsedNum) && parsedNum > maxSerial) {
+          maxSerial = parsedNum;
+        }
+      }
+    }
+
+    const nextSerial = maxSerial + 1;
+    const newSkuId = prefix + String(nextSerial).padStart(3, '0');
+
+    // 3. 寫入 SKU_MASTER
+    const newRow = new Array(headers.length).fill("");
+    newRow[skuIdIdx] = newSkuId;
+    newRow[itemNameIdx] = cleanName;
+    if (cateCodeIdx !== -1) newRow[cateCodeIdx] = categoryCode;
+    if (cateNameIdx !== -1) newRow[cateNameIdx] = categoryName;
+    if (barcodeIdx !== -1) newRow[barcodeIdx] = barcode || "";
+    if (imgIdx !== -1) newRow[imgIdx] = imageUrl || "";
+
+    sheet.appendRow(newRow);
+
+    return {
+      success: true,
+      skuId: newSkuId,
+      itemName: cleanName,
+      cateName: categoryName,
+      categoryCode: categoryCode,
+      barcode: barcode || "",
+      imageUrl: imageUrl,
+      isExisting: false
+    };
+  } catch (e) {
+    writeDebugLog("createPreStockSkuMasterWithCategory 失敗: " + e.message);
+    return { success: false, message: "建檔失敗: " + e.message };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+
+
 
 // ==================== 入庫建檔確認並判定是否無縫回跳 ====================
 function finalizeInboundSku(replyToken, lineUid, session, currentVolunteer, itemName, category, isbn, imageUrl) {
