@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <style>
+      body { font-family: sans-serif; padding: 20px; font-size: 16px; }
+      .btn { background: #16A34A; color: white; padding: 12px 20px; border: none; border-radius: 6px; width: 100%; font-size: 18px; margin-top: 15px; }
+      input, select { width: 100%; padding: 10px; margin: 8px 0; box-sizing: border-box; }
+    </style>
+  </head>
+  <body>
+    <h3>📷 覺風物資拍照登記</h3>
+    
+    <label>目前格位：</label>
+    <input type="text" id="cellCode" value="<?= cellCode ?>" readonly>
+
+    <label>拍照或上傳封面：</label>
+    <!-- capture="environment" 會直接叫起手機後置鏡頭 -->
+    <input type="file" id="cameraInput" accept="image/*" capture="environment">
+
+    <label>物品名稱：</label>
+    <input type="text" id="itemName" placeholder="拍照後自動帶入或手動輸入">
+
+    <label>實清數量：</label>
+    <input type="number" id="qty" value="1" min="0">
+
+    <button class="btn" onclick="submitData()">確認送出庫存</button>
+
+    <script>
+      function submitData() {
+        const cell = document.getElementById('cellCode').value;
+        const item = document.getElementById('itemName').value;
+        const qty = parseInt(document.getElementById('qty').value, 10);
+        const userId = "<?= userId ?>";
+
+        if (!item) { alert("請輸入物品名稱！"); return; }
+
+        // 調用後端的 executeUpdateStockWorkflow
+        google.script.run
+          .withSuccessHandler(function(res) {
+            alert("✅ 登記成功！");
+            // 若在 LIFF 內可直接呼叫 liff.closeWindow()
+          })
+          .webAppStockEntry(userId, cell, item, qty);
+      }
+    </script>
+  </body>
+</html>
