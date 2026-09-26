@@ -10,7 +10,7 @@ const LINE_ACCESS_TOKEN = scriptProperties.getProperty('LINE_ACCESS_TOKEN');
 const BTN_BACK_PREFIX = '↩️ 返回';
 
 // 🌟 網頁作業網址配置 (GAS Web App Exec URL)
-const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzxlu_xiNbKCka18Yf8EPoDHUPAM_Ntawjgfitpwljiaoc1-GEjFNUpyH8va1NoDiE/exec';
+const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzXlu_KInbKCKalBYf8EPoDHUPAM_NtawjgfiTpWIJ1aoci-GEJfNUpyH8vaIiNoDIE/exec';
 
 // 🌟 GitHub Raw 圖片直連網址配置
 const MONK_IMG_URL = 'https://raw.githubusercontent.com/hellojefff/line-inventory-bot/main/assets/monk_stocktake.png'; 
