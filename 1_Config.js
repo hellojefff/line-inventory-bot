@@ -7,10 +7,12 @@ const scriptProperties = PropertiesService.getScriptProperties();
 
 const SPREADSHEET_ID = scriptProperties.getProperty('SPREADSHEET_ID') || '13J32Ewv0PVL8o6hEoJUCuK2Ur5pBEnHO90tdG7XxtC8';
 const LINE_ACCESS_TOKEN = scriptProperties.getProperty('LINE_ACCESS_TOKEN');
+const GEMINI_API_KEY = scriptProperties.getProperty('GEMINI_API_KEY');
+const INBOUND_IMG_FOLDER_ID = scriptProperties.getProperty('INBOUND_IMG_FOLDER_ID');
 const BTN_BACK_PREFIX = '↩️ 返回';
 
-// 🌟 網頁作業網址配置 (GAS Web App Exec URL)
-const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzXlu_KInbKCKalBYf8EPoDHUPAM_NtawjgfiTpWIJ1aoci-GEJfNUpyH8vaIiNoDIE/exec';
+// 🌟 網頁作業網址
+const WEB_APP_URL = scriptProperties.getProperty('WEB_APP_URL') || 'https://script.google.com/macros/s/AKfycbzxlu_xiNbKCka18Yf8EPoDHUPAM_Ntawjgfitpwljiaoc1-GEjFNUpyH8va1NoDiE/exec';
 
 // 🌟 GitHub Raw 圖片直連網址配置
 const MONK_IMG_URL = 'https://raw.githubusercontent.com/hellojefff/line-inventory-bot/main/assets/monk_stocktake.png'; 

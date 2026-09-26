@@ -2,46 +2,155 @@
 <html>
   <head>
     <base target="_top">
+    <meta charset="utf-8">
     <style>
-      body { font-family: sans-serif; padding: 20px; font-size: 16px; }
-      .btn { background: #16A34A; color: white; padding: 12px 20px; border: none; border-radius: 6px; width: 100%; font-size: 18px; margin-top: 15px; }
-      input, select { width: 100%; padding: 10px; margin: 8px 0; box-sizing: border-box; }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        background-color: #F3F4F6;
+        padding: 16px;
+        margin: 0;
+        color: #1F2937;
+      }
+      .card {
+        background: #FFFFFF;
+        border-radius: 12px;
+        padding: 20px;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+      }
+      h2 { color: #065F46; margin-top: 0; font-size: 19px; }
+      p.desc { font-size: 13px; color: #4B5563; margin-top: -6px; margin-bottom: 16px; line-height: 1.5; }
+      label { display: block; font-weight: 600; margin-top: 14px; font-size: 14px; color: #374151; }
+      input[type="text"] {
+        width: 100%; padding: 12px; margin-top: 6px; border: 1px solid #D1D5DB; border-radius: 8px; box-sizing: border-box; font-size: 16px;
+      }
+      .camera-trigger {
+        display: block; background: #047857; color: white; text-align: center; padding: 14px; border-radius: 8px; font-size: 16px; font-weight: bold; margin-top: 10px; cursor: pointer;
+      }
+      #previewImg {
+        display: none; width: 100%; max-height: 240px; object-fit: contain; border-radius: 8px; margin-top: 12px; background: #E5E7EB;
+      }
+      .status-box {
+        display: none; padding: 12px; border-radius: 8px; margin-top: 14px; font-size: 14px; line-height: 1.4;
+      }
+      .status-loading { background: #FEF3C7; color: #92400E; display: block; }
+      .status-success { background: #ECFDF5; color: #065F46; display: block; }
+      .submit-btn {
+        background: #16A34A; color: white; border: none; width: 100%; padding: 14px; font-size: 17px; font-weight: bold; border-radius: 8px; margin-top: 22px; cursor: pointer;
+      }
+      .submit-btn:disabled { background: #9CA3AF; }
     </style>
   </head>
   <body>
-    <h3>📷 覺風物資拍照登記</h3>
-    
-    <label>目前格位：</label>
-    <input type="text" id="cellCode" value="<?= cellCode ?>" readonly>
+    <div class="card">
+      <h2>📷 零庫存前置物資建檔</h2>
+      <p class="desc">拍攝物資封面進行 AI 辨識，核對與修改資訊後，直接寫入物資主檔 (SKU_MASTER)。此流程不涉及盤點格位與庫存量。</p>
 
-    <label>拍照或上傳封面：</label>
-    <!-- capture="environment" 會直接叫起手機後置鏡頭 -->
-    <input type="file" id="cameraInput" accept="image/*" capture="environment">
+      <label class="camera-trigger" for="cameraFile">📸 點擊開啟相機拍攝封面</label>
+      <input type="file" id="cameraFile" style="display:none;" accept="image/*" capture="environment" onchange="handlePhotoUpload(event)">
+      
+      <img id="previewImg" alt="封面預覽">
+      <div id="statusBox" class="status-box"></div>
 
-    <label>物品名稱：</label>
-    <input type="text" id="itemName" placeholder="拍照後自動帶入或手動輸入">
+      <div id="formSection">
+        <label>物資品名 / 書名 (可手動修改)：</label>
+        <input type="text" id="itemName" placeholder="拍照後自動辨識帶入">
 
-    <label>實清數量：</label>
-    <input type="number" id="qty" value="1" min="0">
+        <label>物資大類：</label>
+        <input type="text" id="category" value="書籍" placeholder="例如：經書、佛學著作、文宣刊物">
 
-    <button class="btn" onclick="submitData()">確認送出庫存</button>
+        <label>ISBN / 條碼編號：</label>
+        <input type="text" id="barcode" placeholder="選填，無條碼可留空">
+
+        <input type="hidden" id="uploadedImgUrl" value="">
+
+        <button id="submitBtn" class="submit-btn" onclick="submitFinalSku()">💾 確認並建立物資主檔</button>
+      </div>
+    </div>
 
     <script>
-      function submitData() {
-        const cell = document.getElementById('cellCode').value;
-        const item = document.getElementById('itemName').value;
-        const qty = parseInt(document.getElementById('qty').value, 10);
-        const userId = "<?= userId ?>";
+      function showStatus(text, isSuccess) {
+        const box = document.getElementById('statusBox');
+        box.className = isSuccess ? 'status-box status-success' : 'status-box status-loading';
+        box.innerText = text;
+      }
 
-        if (!item) { alert("請輸入物品名稱！"); return; }
+      function handlePhotoUpload(event) {
+        const file = event.target.files[0];
+        if (!file) return;
 
-        // 調用後端的 executeUpdateStockWorkflow
+        const reader = new FileReader();
+        reader.onload = function(e) {
+          const fullBase64 = e.target.result;
+          const base64Data = fullBase64.split(',')[1];
+          const mimeType = file.type || 'image/jpeg';
+
+          const img = document.getElementById('previewImg');
+          img.src = fullBase64;
+          img.style.display = 'block';
+
+          showStatus('⏳ 正在上傳至雲端硬碟並辨識中，請稍候...', false);
+          document.getElementById('submitBtn').disabled = true;
+
+          google.script.run
+            .withSuccessHandler(function(res) {
+              if (res.success) {
+                showStatus('✨ 辨識完成！請核對並修正下方內容，確認後送出建檔。', true);
+                document.getElementById('uploadedImgUrl').value = res.imageUrl;
+                document.getElementById('itemName').value = res.recognizedName;
+                document.getElementById('barcode').value = res.barcode;
+                if (res.category) document.getElementById('category').value = res.category;
+              } else {
+                showStatus('⚠️ 辨識提示：' + res.message + '，請直接手動輸入完整品名。', false);
+              }
+              document.getElementById('submitBtn').disabled = false;
+            })
+            .withFailureHandler(function(err) {
+              showStatus('❌ 發生錯誤：' + err.message + '，請手動輸入品名建檔。', false);
+              document.getElementById('submitBtn').disabled = false;
+            })
+            .uploadAndAnalyzeImage(base64Data, mimeType);
+        };
+        reader.readAsDataURL(file);
+      }
+
+      function submitFinalSku() {
+        const item = document.getElementById('itemName').value.trim();
+        const imgUrl = document.getElementById('uploadedImgUrl').value;
+        const category = document.getElementById('category').value.trim();
+        const barcode = document.getElementById('barcode').value.trim();
+        const btn = document.getElementById('submitBtn');
+
+        if (!item) {
+          alert('請輸入或確認物資品名！');
+          return;
+        }
+
+        btn.disabled = true;
+        btn.innerText = '正在建立主檔...';
+
         google.script.run
           .withSuccessHandler(function(res) {
-            alert("✅ 登記成功！");
-            // 若在 LIFF 內可直接呼叫 liff.closeWindow()
+            if (res.success) {
+              const tip = res.isExisting ? '⚠️ 提醒：此品項已存在主檔，已為您補齊封面！\n' : '🎉 新品項建檔成功！\n';
+              alert(tip + '物資編號：' + res.skuId + '\n品名：' + res.itemName + '\n分類：' + res.cateName);
+              
+              document.getElementById('itemName').value = '';
+              document.getElementById('barcode').value = '';
+              document.getElementById('previewImg').style.display = 'none';
+              document.getElementById('uploadedImgUrl').value = '';
+              document.getElementById('statusBox').style.display = 'none';
+            } else {
+              alert('❌ 建檔失敗：' + res.message);
+            }
+            btn.disabled = false;
+            btn.innerText = '💾 確認並建立物資主檔';
           })
-          .webAppStockEntry(userId, cell, item, qty);
+          .withFailureHandler(function(err) {
+            alert('❌ 系統異常：' + err.message);
+            btn.disabled = false;
+            btn.innerText = '💾 確認並建立物資主檔';
+          })
+          .submitConfirmedSkuMaster(item, imgUrl, category, barcode);
       }
     </script>
   </body>

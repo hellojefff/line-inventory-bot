@@ -1,13 +1,77 @@
 /**
  * 模組 5：LINE Flex Message 視覺圖卡樣板 (5_FlexTemplates.js)
- * 重構重點：
- * 1. 移除廢棄的純對話框建檔與單品確認卡片
- * 2. 在格位鎖定與盤點卡片中整合「📷 開啟相機拍照／登記網頁」按鈕
- * 3. 維持長輩友善字體大小與安全退出機制
  */
 
 function replyTextMessage(replyToken, text) {
   sendToLine({ replyToken: replyToken, messages: [{ type: 'text', text: text }] });
+}
+
+/**
+ * 🌟 零庫存前置建檔導引卡片 (修復 replyFlexInboundPromptCard is not defined)
+ */
+function replyFlexInboundPromptCard(replyToken, userName) {
+  const flexContents = {
+    "type": "bubble",
+    "header": {
+      "type": "box",
+      "layout": "vertical",
+      "backgroundColor": "#ECFDF5",
+      "contents": [
+        { "type": "text", "text": "📷 零庫存前置建檔", "weight": "bold", "size": "xl", "color": "#065F46" },
+        { "type": "text", "text": `${userName} 您好，請點擊下方開啟相機：`, "size": "sm", "color": "#047857", "margin": "xs" }
+      ]
+    },
+    "body": {
+      "type": "box",
+      "layout": "vertical",
+      "contents": [
+        {
+          "type": "text",
+          "text": "此功能專用於【新物資前置建檔】。\n拍照後由 AI 辨識品名與條碼，並自動上傳封面存入物資主檔 (SKU_MASTER)，不涉及任何儲位與庫存數量。",
+          "size": "sm",
+          "color": "#374151",
+          "wrap": true
+        },
+        {
+          "type": "button",
+          "style": "primary",
+          "color": "#16A34A",
+          "height": "md",
+          "margin": "lg",
+          "action": {
+            "type": "uri",
+            "label": "📸 開啟拍照建檔網頁",
+            "uri": WEB_APP_URL
+          }
+        }
+      ]
+    },
+    "footer": {
+      "type": "box",
+      "layout": "vertical",
+      "contents": [
+        {
+          "type": "button",
+          "style": "secondary",
+          "height": "md",
+          "action": {
+            "type": "message",
+            "label": "🚪 結束 (回主選單)",
+            "text": CMD_EXIT_STOCKTAKE
+          }
+        }
+      ]
+    }
+  };
+
+  sendToLine({
+    replyToken: replyToken,
+    messages: [{
+      "type": "flex",
+      "altText": "📷 零庫存前置拍照建檔",
+      "contents": flexContents
+    }]
+  });
 }
 
 function replyFlexManualCard(replyToken, userName) {
@@ -49,8 +113,8 @@ function replyFlexManualCard(replyToken, userName) {
           "cornerRadius": "md",
           "paddingAll": "md",
           "contents": [
-            { "type": "text", "text": "第 2 步：拍照或搜尋物品", "weight": "bold", "size": "md", "color": "#15803D" },
-            { "type": "text", "text": "鎖定格位後，可點選「📷 拍照登記」開啟相機，或在對話框直接打字比對。", "size": "sm", "color": "#4B5563", "margin": "xs", "wrap": true }
+            { "type": "text", "text": "第 2 步：搜尋物資名稱", "weight": "bold", "size": "md", "color": "#15803D" },
+            { "type": "text", "text": "在對話框直接打入【書名或用品名稱】進行即時比對。", "size": "sm", "color": "#4B5563", "margin": "xs", "wrap": true }
           ]
         },
         {
@@ -62,8 +126,8 @@ function replyFlexManualCard(replyToken, userName) {
           "cornerRadius": "md",
           "paddingAll": "md",
           "contents": [
-            { "type": "text", "text": "第 3 步：確認實清數量", "weight": "bold", "size": "md", "color": "#15803D" },
-            { "type": "text", "text": "輸入眼前看到的實際數量，系統即刻更新該格位庫存！", "size": "sm", "color": "#4B5563", "margin": "xs", "wrap": true }
+            { "type": "text", "text": "第 3 步：輸入實清數量", "weight": "bold", "size": "md", "color": "#15803D" },
+            { "type": "text", "text": "輸入眼前看到的實際數量（如：5），系統即刻更新該格位庫存！", "size": "sm", "color": "#4B5563", "margin": "xs", "wrap": true }
           ]
         },
         {
@@ -74,7 +138,7 @@ function replyFlexManualCard(replyToken, userName) {
           "paddingAll": "md",
           "contents": [
             { "type": "text", "text": "💡 貼心小提醒：", "weight": "bold", "size": "sm", "color": "#B45309" },
-            { "type": "text", "text": "• 若登記錯誤，點擊「✏️ 立即更正」可隨時修改。\n• 任何步驟皆可按「↩️ 返回」或「🚪 結束盤點」。", "size": "xs", "color": "#92400E", "margin": "xs", "wrap": true }
+            { "type": "text", "text": "• 若有全新物資尚未建檔，請點選「📷 拍照入庫」建立主檔。\n• 任何步驟皆可按「↩️ 返回」或「🚪 結束盤點」。", "size": "xs", "color": "#92400E", "margin": "xs", "wrap": true }
           ]
         }
       ]
@@ -119,7 +183,7 @@ function replyExitStocktakeWithImage(replyToken, userName) {
       },
       {
         "type": "text",
-        "text": `🙏 ${userName} 您好，已為您安全結束本次盤點作業。\n\n感謝您的發心付出！如需再次盤點，請隨時點選下方「📷 開始盤點」。`
+        "text": `🙏 ${userName} 您好，已為您安全結束本次作業。\n\n感謝您的發心付出！如需繼續盤點或建檔，請點擊下方圖文選單。`
       }
     ]
   });
@@ -220,17 +284,12 @@ function replyFlexMenuCard(replyToken, title, subtitle, items, backBtnLabel = nu
   });
 }
 
-/**
- * 🌟 核心更新：格位鎖定卡片，提供「開啟相機/網頁拍照」按鈕與手動搜尋
- */
 function replyFlexSearchPromptCard(replyToken, spaceName, boxName, shelfName, cellCode, isRetry = false) {
   const currentBoxLabel = boxName || "同櫃子";
   const cleanBoxName = currentBoxLabel.includes('-') ? currentBoxLabel.split('-')[1].split('(')[0] : (currentBoxLabel.split('(')[0] || "同櫃");
-  const headerTitle = isRetry ? "🔍 重新定位與登記" : "📍 已鎖定盤點格位";
+  const headerTitle = isRetry ? "🔍 重新搜尋物資" : "📍 已定位盤點格位";
+  const promptText = isRetry ? "🔍 請在下方對話框輸入新的【物品名稱】或關鍵字：" : "🔍 請在下方對話框輸入【物品名稱】進行比對：";
   
-  // 建立前往網頁的動態 URL (自動帶入 cellCode)
-  const targetWebUrl = `${WEB_APP_URL}${WEB_APP_URL.includes('?') ? '&' : '?'}cellCode=${encodeURIComponent(cellCode)}`;
-
   const flexContents = {
     "type": "bubble",
     "header": {
@@ -239,7 +298,7 @@ function replyFlexSearchPromptCard(replyToken, spaceName, boxName, shelfName, ce
       "backgroundColor": "#F0FDF4",
       "contents": [
         { "type": "text", "text": headerTitle, "weight": "bold", "size": "xl", "color": "#15803D" },
-        { "type": "text", "text": "請使用拍照入庫，或在下方對話框打字搜尋", "size": "xs", "color": "#4B5563", "margin": "xs" }
+        { "type": "text", "text": "請在對話框直接打字搜尋", "size": "xs", "color": "#4B5563", "margin": "xs" }
       ]
     },
     "body": {
@@ -260,25 +319,13 @@ function replyFlexSearchPromptCard(replyToken, spaceName, boxName, shelfName, ce
             { "type": "text", "text": `格位代碼：${cellCode}`, "size": "xs", "color": "#9CA3AF", "margin": "sm" }
           ]
         },
-        // 🌟 新增：直接開啟瀏覽器/相機按鈕
-        {
-          "type": "button",
-          "style": "primary",
-          "color": "#16A34A",
-          "height": "md",
-          "margin": "lg",
-          "action": {
-            "type": "uri",
-            "label": "📷 開啟相機拍照／登記網頁",
-            "uri": targetWebUrl
-          }
-        },
         {
           "type": "text",
-          "text": "💬 或直接在對話框輸入【物品名稱】手動搜尋：",
-          "size": "xs",
-          "color": "#6B7280",
-          "margin": "md",
+          "text": promptText,
+          "size": "sm",
+          "weight": "bold",
+          "color": "#374151",
+          "margin": "lg",
           "wrap": true
         }
       ]
@@ -324,8 +371,7 @@ function replyFlexSearchPromptCard(replyToken, spaceName, boxName, shelfName, ce
 
 function replyFlexPostStocktakeCard(replyToken, userName, fullChineseLocation, cellCode, itemName, qty, boxName) {
   const currentBoxLabel = boxName ? (boxName.includes('-') ? boxName.split('-')[1].split('(')[0] : boxName.split('(')[0]) : "同櫃子";
-  const targetWebUrl = `${WEB_APP_URL}${WEB_APP_URL.includes('?') ? '&' : '?'}cellCode=${encodeURIComponent(cellCode)}`;
-
+  
   const flexContents = {
     "type": "bubble",
     "header": {
@@ -369,7 +415,6 @@ function replyFlexPostStocktakeCard(replyToken, userName, fullChineseLocation, c
         { "type": "separator", "margin": "lg" },
         { "type": "text", "text": "下一步您想要：", "weight": "bold", "size": "md", "color": "#111827", "margin": "lg" },
         
-        // 🌟 快捷開啟下一件拍照
         {
           "type": "button",
           "style": "primary",
@@ -377,9 +422,9 @@ function replyFlexPostStocktakeCard(replyToken, userName, fullChineseLocation, c
           "height": "md",
           "margin": "md",
           "action": {
-            "type": "uri",
-            "label": "📷 同格位繼續拍照登記",
-            "uri": targetWebUrl
+            "type": "message",
+            "label": "📦 同格位盤點下一件物品",
+            "text": CMD_NEXT_SKU_SAME_CELL
           }
         },
         {
@@ -521,8 +566,7 @@ function replyFlexCorrectionMenu(replyToken, currentItemName, currentQty) {
 
 function replyCorrectionSuccessWithMonk(replyToken, userName, fullChineseLocation, cellCode, itemName, qty, boxName, customTip) {
   const currentBoxLabel = boxName ? (boxName.includes('-') ? boxName.split('-')[1].split('(')[0] : boxName.split('(')[0]) : "同櫃子";
-  const targetWebUrl = `${WEB_APP_URL}${WEB_APP_URL.includes('?') ? '&' : '?'}cellCode=${encodeURIComponent(cellCode)}`;
-
+  
   const flexContents = {
     "type": "bubble",
     "header": {
@@ -573,9 +617,9 @@ function replyCorrectionSuccessWithMonk(replyToken, userName, fullChineseLocatio
           "height": "md",
           "margin": "md",
           "action": {
-            "type": "uri",
-            "label": "📷 同格位繼續拍照登記",
-            "uri": targetWebUrl
+            "type": "message",
+            "label": "📦 同格位盤點下一件物品",
+            "text": CMD_NEXT_SKU_SAME_CELL
           }
         },
         {
