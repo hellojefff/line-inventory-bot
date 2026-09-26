@@ -5,7 +5,7 @@
 // ==================== 全局環境變數讀取 (安全架構) ====================
 const scriptProperties = PropertiesService.getScriptProperties();
 
-const SPREADSHEET_ID = scriptProperties.getProperty('SPREADSHEET_ID') || '13J32Ewv0PVL8o6hEoJUCuK2Ur5pBEnHO90tdG7XxtC8';
+const SPREADSHEET_ID = scriptProperties.getProperty('SPREADSHEET_ID') ;
 const LINE_ACCESS_TOKEN = scriptProperties.getProperty('LINE_ACCESS_TOKEN');
 const GEMINI_API_KEY = scriptProperties.getProperty('GEMINI_API_KEY');
 const INBOUND_IMG_FOLDER_ID = scriptProperties.getProperty('INBOUND_IMG_FOLDER_ID');
