@@ -1,77 +1,92 @@
-param(
-    [string]$CommitMsg = ""
+﻿param(
+    [string]$CommitMsg = "",
+    [switch]$SkipGas            # 加上此參數可跳過部署至 GAS
 )
 
+# 遇到錯誤時中斷執行
 $ErrorActionPreference = "Stop"
 
 Write-Host "====================================================" -ForegroundColor Cyan
-Write-Host "   GAS (clasp) & GitHub Sync Tool                   " -ForegroundColor Cyan
+Write-Host "   GAS (clasp) & GitHub 同步工具                    " -ForegroundColor Cyan
 Write-Host "====================================================" -ForegroundColor Cyan
 
-# 1. Dependency Check
+# ==============================================================================
+# 步驟 1：依賴工具與環境檢查
+# ==============================================================================
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
-    Write-Host "[ERROR] Git is not installed or not in PATH." -ForegroundColor Red
+    Write-Host "[錯誤] 未安裝 Git 或未加入系統 PATH 環境變數。" -ForegroundColor Red
     exit 1
 }
 
 if (-not (Get-Command clasp -ErrorAction SilentlyContinue)) {
-    Write-Host "[ERROR] @google/clasp is not installed." -ForegroundColor Red
+    Write-Host '[錯誤] 未安裝 @google/clasp，請執行 npm install -g @google/clasp。' -ForegroundColor Red
     exit 1
 }
 
 if (-not (Test-Path ".clasp.json")) {
-    Write-Host "[ERROR] .clasp.json not found in current directory." -ForegroundColor Red
+    Write-Host "[錯誤] 當前目錄找不到 .clasp.json，請確認位於專案根目錄。" -ForegroundColor Red
     exit 1
 }
 
-# 2. Security Check (改用純字串過濾，徹底排除引號衝突)
+# ==============================================================================
+# 步驟 2：資安防護與機敏資訊檢查
+# ==============================================================================
 Write-Host ""
-Write-Host "[1/4] Running security check..." -ForegroundColor Yellow
+Write-Host "[1/4] 正在執行資安與敏感金鑰掃描..." -ForegroundColor Yellow
 
 $secretFound = $false
 
-# 檢查是否有明文 Gemini API Key (AIzaSy...)
+# 檢查程式碼中是否含有明文的 Gemini API Key
 $apiKeyCheck = git grep -E "AIzaSy[a-zA-Z0-9_-]{33}" -- ":(exclude)sync.ps1" ":(exclude)sync.sh" 2>$null
 if ($apiKeyCheck) {
-    Write-Host "[ALERT] Gemini API Key detected in code!" -ForegroundColor Red
+    Write-Host "[警告] 程式碼中偵測到明文的 Gemini API Key！" -ForegroundColor Red
     $secretFound = $true
 }
 
-# 檢查 1_Config.js 中是否留存長度大於 40 的明文 Token（避開引號解析錯誤）
+# 檢查是否留存長度大於 40 碼的明文 LINE Access Token
 $tokenCheck = git grep -E "LINE_ACCESS_TOKEN.*=.*[A-Za-z0-9+/]{40,}" -- ":(exclude)sync.ps1" ":(exclude)sync.sh" 2>$null
 if ($tokenCheck) {
-    Write-Host "[ALERT] Plaintext LINE Access Token detected in code!" -ForegroundColor Red
+    Write-Host "[警告] 程式碼中偵測到明文的 LINE Access Token！" -ForegroundColor Red
     $secretFound = $true
 }
 
-# 檢查是否有未解衝突標籤
-$conflictCheck = git grep -F "<<<<<<< HEAD" -- ":(exclude)sync.ps1" ":(exclude)sync.sh" 2>$null
+# 檢查未解決的 Git 衝突標籤（透過字串拼接避免觸發管線重新導向語法錯誤）
+$conflictPattern = [string]::Concat("<", "<", "<", "<", "<", "<", "<", " HEAD")
+$conflictCheck = git grep -F $conflictPattern -- ":(exclude)sync.ps1" ":(exclude)sync.sh" 2>$null
 if ($conflictCheck) {
-    Write-Host "[ERROR] Unresolved Git merge conflicts detected!" -ForegroundColor Red
+    Write-Host "[錯誤] 偵測到未解決的 Git 合併衝突標記！" -ForegroundColor Red
     exit 1
 }
 
 if ($secretFound) {
-    Write-Host "[BLOCKED] Move secrets to Script Properties before pushing." -ForegroundColor Red
+    Write-Host "[已阻斷] 請將金鑰移至 GAS 專案設定的 Script Properties 後再行推送。" -ForegroundColor Red
     exit 1
 }
-Write-Host "[PASS] No plaintext secrets detected." -ForegroundColor Green
+Write-Host "[通過] 安全檢查通過，未發現明文金鑰。" -ForegroundColor Green
 
-# 3. Deploy to GAS
+# ==============================================================================
+# 步驟 3：部署至 Google Apps Script (由 -SkipGas 控制)
+# ==============================================================================
 Write-Host ""
-Write-Host "[2/4] Pushing code to Google Apps Script..." -ForegroundColor Yellow
-clasp push
-Write-Host "[PASS] GAS deployment succeeded." -ForegroundColor Green
+if ($SkipGas) {
+    Write-Host "[2/4] 已指定 -SkipGas，跳過推送到 Google Apps Script。" -ForegroundColor Cyan
+} else {
+    Write-Host "[2/4] 正在將程式碼推播至 Google Apps Script..." -ForegroundColor Yellow
+    clasp push
+    Write-Host "[通過] GAS 部署完成。" -ForegroundColor Green
+}
 
-# 4. Prepare Git Commit
+# ==============================================================================
+# 步驟 4：檢查 Git 變更狀態與準備 Commit 訊息
+# ==============================================================================
 Write-Host ""
-Write-Host "[3/4] Checking Git status..." -ForegroundColor Yellow
+Write-Host "[3/4] 正在檢查 Git 本地變更狀態..." -ForegroundColor Yellow
 
 $gitStatus = git status --porcelain
 if (-not $gitStatus) {
-    Write-Host "[INFO] Nothing to commit. Working tree clean." -ForegroundColor Green
+    Write-Host "[資訊] 沒有需要提交的變更，工作目錄是乾淨的。" -ForegroundColor Green
     Write-Host "====================================================" -ForegroundColor Cyan
-    Write-Host "Done: GAS is up to date." -ForegroundColor Green
+    Write-Host "完成：專案已是最新狀態。" -ForegroundColor Green
     exit 0
 }
 
@@ -80,7 +95,7 @@ git status --short
 if ([string]::IsNullOrWhiteSpace($CommitMsg)) {
     $timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm")
     $defaultMsg = "chore: sync " + $timestamp
-    $inputMsg = Read-Host "Enter commit message (Press Enter to use [$defaultMsg])"
+    $inputMsg = Read-Host "請輸入 Commit 訊息 (直接按 Enter 將採用預設 [$defaultMsg])"
     if ([string]::IsNullOrWhiteSpace($inputMsg)) {
         $CommitMsg = $defaultMsg
     } else {
@@ -88,9 +103,11 @@ if ([string]::IsNullOrWhiteSpace($CommitMsg)) {
     }
 }
 
-# 5. Git Commit & Push
+# ==============================================================================
+# 步驟 5：提交並推送到 GitHub
+# ==============================================================================
 Write-Host ""
-Write-Host "[4/4] Pushing to GitHub..." -ForegroundColor Yellow
+Write-Host "[4/4] 正在推送至 GitHub 遠端儲存庫..." -ForegroundColor Yellow
 git add .
 git commit -m "$CommitMsg"
 
@@ -99,6 +116,6 @@ git push origin $currentBranch
 
 Write-Host ""
 Write-Host "====================================================" -ForegroundColor Cyan
-Write-Host "Done: GAS and GitHub synchronized successfully!" -ForegroundColor Green
-Write-Host "Branch: $currentBranch | Message: $CommitMsg" -ForegroundColor Yellow
+Write-Host "完成：GitHub 已同步成功！" -ForegroundColor Green
+Write-Host "分支: $currentBranch | 提交訊息: $CommitMsg" -ForegroundColor Yellow
 Write-Host "====================================================" -ForegroundColor Cyan
