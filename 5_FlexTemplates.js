@@ -7,7 +7,7 @@ function replyTextMessage(replyToken, text) {
 }
 
 /**
- * 🌟 零庫存前置建檔導引卡片 (修復 replyFlexInboundPromptCard is not defined)
+ * 🌟 零庫存前置建檔導引卡片
  */
 function replyFlexInboundPromptCard(replyToken, userName) {
   const flexContents = {
@@ -27,7 +27,7 @@ function replyFlexInboundPromptCard(replyToken, userName) {
       "contents": [
         {
           "type": "text",
-          "text": "此功能專用於【新物資前置建檔】。\n拍照後由 AI 辨識品名與條碼，並自動上傳封面存入物資主檔 (SKU_MASTER)，不涉及任何儲位與庫存數量。",
+          "text": "此功能專用於【新物資前置建檔】。\n拍照後由 AI 辨識品名、作者與條碼，自動存入物資主檔 (SKU_MASTER)，不涉及任何儲位與庫存數量。",
           "size": "sm",
           "color": "#374151",
           "wrap": true
@@ -693,50 +693,112 @@ function replyCorrectionSuccessWithMonk(replyToken, userName, fullChineseLocatio
   });
 }
 
+/**
+ * 🌟 搜尋多筆物資直列清單：動態呈現封面與 ISBN，無資料自動隱藏
+ */
 function replyFlexSkuVerticalList(replyToken, skus) {
   const skuRows = skus.map(s => {
-    const skuId = s['品項編號'] ? s['品項編號'].toString() : "未知";
-    const itemName = s['物品名稱'] ? s['物品名稱'].toString() : "未知名稱";
-    const cateName = s['大類'] ? s['大類'].toString() : "一般物資";
+    const skuId = s['品項編號'] ? s['品項編號'].toString().trim() : "未知";
+    const itemName = s['物品名稱'] ? s['物品名稱'].toString().trim() : "未知名稱";
+    const cateName = (s['大類名稱'] || s['大類'] || "一般物資").toString().trim();
+    const barcode = (s['條碼編號'] || s['ISBN/條碼'] || "").toString().trim();
+    const rawImgUrl = (s['封面圖片URL'] || s['圖片網址'] || "").toString().trim();
 
+    // 1. 組裝右側文字內容
+    const infoContents = [
+      {
+        "type": "text",
+        "text": `📁 ${cateName}`,
+        "weight": "bold",
+        "size": "xs",
+        "color": "#6B7280"
+      },
+      {
+        "type": "text",
+        "text": itemName,
+        "weight": "bold",
+        "size": "md",
+        "color": "#111827",
+        "wrap": true,
+        "margin": "xs"
+      },
+      {
+        "type": "text",
+        "text": `編號: ${skuId}`,
+        "size": "xs",
+        "color": "#9CA3AF",
+        "margin": "xs"
+      }
+    ];
+
+    // 🌟 條碼條件渲染：有條碼才顯示藍色小標籤
+    if (barcode) {
+      infoContents.push({
+        "type": "box",
+        "layout": "baseline",
+        "margin": "xs",
+        "contents": [
+          {
+            "type": "text",
+            "text": `🏷️ ISBN: ${barcode}`,
+            "size": "xxs",
+            "color": "#0284C7",
+            "wrap": true
+          }
+        ]
+      });
+    }
+
+    // 2. 封面圖條件渲染：有圖片網址才以橫向左右排版呈現縮圖
+    let topSection;
+    if (rawImgUrl && (rawImgUrl.startsWith("http://") || rawImgUrl.startsWith("https://"))) {
+      topSection = {
+        "type": "box",
+        "layout": "horizontal",
+        "spacing": "md",
+        "contents": [
+          {
+            "type": "image",
+            "url": rawImgUrl,
+            "size": "72px",
+            "aspectRatio": "3:4",
+            "aspectMode": "cover",
+            "cornerRadius": "md",
+            "flex": 0
+          },
+          {
+            "type": "box",
+            "layout": "vertical",
+            "flex": 1,
+            "contents": infoContents
+          }
+        ]
+      };
+    } else {
+      topSection = {
+        "type": "box",
+        "layout": "vertical",
+        "contents": infoContents
+      };
+    }
+
+    // 3. 單品卡片元件封裝
     return {
       "type": "box",
       "layout": "vertical",
-      "backgroundColor": "#F9FAFB",
+      "backgroundColor": "#FFFFFF",
       "borderColor": "#16A34A",
       "borderWidth": "1px",
       "cornerRadius": "lg",
-      "paddingAll": "lg",
+      "paddingAll": "md",
       "margin": "md",
       "contents": [
-        {
-          "type": "text",
-          "text": `📁 ${cateName}`,
-          "weight": "bold",
-          "size": "sm",
-          "color": "#6B7280"
-        },
-        {
-          "type": "text",
-          "text": itemName,
-          "weight": "bold",
-          "size": "lg",
-          "color": "#111827",
-          "wrap": true,
-          "margin": "xs"
-        },
-        {
-          "type": "text",
-          "text": `編號: ${skuId}`,
-          "size": "sm",
-          "color": "#9CA3AF",
-          "margin": "xs"
-        },
+        topSection,
         {
           "type": "button",
           "style": "primary",
           "color": "#16A34A",
-          "height": "md",
+          "height": "sm",
           "margin": "md",
           "action": {
             "type": "message",
