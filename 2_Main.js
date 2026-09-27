@@ -110,14 +110,19 @@ function uploadAndAnalyzeImage(base64Data, mimeType) {
 }
 
 /**
- * 調用 Gemini 2.5 Flash Vision 辨識封面品名、作者、條碼與大類
+ * 調用 Gemini Vision 辨識封面品名、作者、條碼與大類（含 503 負載過高自動備援機制）
  */
 function callGeminiVisionRecognition(base64Data, mimeType) {
   if (!GEMINI_API_KEY) {
     return { itemName: "", author: "", barcode: "", category: "出版品與佛藝書籍" };
   }
 
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${GEMINI_API_KEY}`;
+  // 🌟 備援模型陣列：優先使用 gemini-3.8-flash，若遇 503 依序降級切換
+  const candidateModels = [
+    "gemini-3.8-flash",
+    "gemini-3.5-flash",
+    "gemini-flash-latest"
+  ];
 
   const prompt = `你是一個專業的圖書與佛寺物資建檔助理。請仔細觀察這張照片：
 1. 辨識照片中的【完整書籍書名/物品品名】（例如《大智慧到彼岸》，若有副標題可一併保留）。
@@ -152,26 +157,34 @@ function callGeminiVisionRecognition(base64Data, mimeType) {
     muteHttpExceptions: true
   };
 
-  try {
-    const response = UrlFetchApp.fetch(endpoint, options);
-    const resCode = response.getResponseCode();
-    const resText = response.getContentText();
+  for (const model of candidateModels) {
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
+    try {
+      const response = UrlFetchApp.fetch(endpoint, options);
+      const resCode = response.getResponseCode();
+      const resText = response.getContentText();
 
-    if (resCode === 200) {
-      const resJson = JSON.parse(resText);
-      if (resJson.candidates && resJson.candidates[0].content && resJson.candidates[0].content.parts[0].text) {
-        const rawJson = resJson.candidates[0].content.parts[0].text;
-        return JSON.parse(rawJson);
+      if (resCode === 200) {
+        const resJson = JSON.parse(resText);
+        if (resJson.candidates && resJson.candidates[0].content && resJson.candidates[0].content.parts[0].text) {
+          const rawJson = resJson.candidates[0].content.parts[0].text;
+          return JSON.parse(rawJson);
+        }
+      } else if (resCode === 503 || resCode === 429) {
+        writeDebugLog(`[Gemini ${model}] 伺服器忙碌 (${resCode})，正在自動切換至備援模型...`);
+        Utilities.sleep(1000); // 稍候 1 秒後重試下一個模型
+        continue;
+      } else {
+        writeDebugLog(`Gemini [${model}] API 回傳狀態碼異常 [${resCode}]: ${resText}`);
       }
-    } else {
-      writeDebugLog(`Gemini API 回傳狀態碼異常 [${resCode}]: ${resText}`);
+    } catch (err) {
+      writeDebugLog(`Gemini [${model}] fetch 失敗: ${err.message}`);
     }
-  } catch (err) {
-    writeDebugLog(`Gemini fetch 錯誤: ${err.message}`);
   }
 
   return { itemName: "", author: "", barcode: "", category: "出版品與佛藝書籍" };
 }
+
 
 /**
  * 網頁步驟 2：確認建檔 ➔ 派發流水號 ➔ 寫入 SKU_MASTER (規格或作者欄位)
