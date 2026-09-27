@@ -117,7 +117,7 @@ function callGeminiVisionRecognition(base64Data, mimeType) {
     return { itemName: "", author: "", barcode: "", category: "出版品與佛藝書籍" };
   }
 
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${GEMINI_API_KEY}`;
 
   const prompt = `你是一個專業的圖書與佛寺物資建檔助理。請仔細觀察這張照片：
 1. 辨識照片中的【完整書籍書名/物品品名】（例如《大智慧到彼岸》，若有副標題可一併保留）。
