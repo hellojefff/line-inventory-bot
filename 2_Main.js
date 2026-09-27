@@ -117,11 +117,11 @@ function callGeminiVisionRecognition(base64Data, mimeType) {
     return { itemName: "", author: "", barcode: "", category: "出版品與佛藝書籍" };
   }
 
-  // 🌟 備援模型陣列：優先使用 gemini-3.8-flash，若遇 503 依序降級切換
+// 🌟 優先使用輕量分流通道路線，大幅避開尖峰 503
   const candidateModels = [
-    "gemini-3.8-flash",
-    "gemini-3.5-flash",
-    "gemini-flash-latest"
+    "gemini-flash-lite-latest",
+    "gemini-3.5-flash-lite",
+    "gemini-3.8-flash"
   ];
 
   const prompt = `你是一個專業的圖書與佛寺物資建檔助理。請仔細觀察這張照片：
@@ -172,7 +172,7 @@ function callGeminiVisionRecognition(base64Data, mimeType) {
         }
       } else if (resCode === 503 || resCode === 429) {
         writeDebugLog(`[Gemini ${model}] 伺服器忙碌 (${resCode})，正在自動切換至備援模型...`);
-        Utilities.sleep(1000); // 稍候 1 秒後重試下一個模型
+        Utilities.sleep(300); // 稍候 1 秒後重試下一個模型
         continue;
       } else {
         writeDebugLog(`Gemini [${model}] API 回傳狀態碼異常 [${resCode}]: ${resText}`);
