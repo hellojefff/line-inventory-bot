@@ -99,7 +99,7 @@ function uploadAndAnalyzeImage(base64Data, mimeType) {
       success: true,
       imageUrl: fileUrl,
       recognizedName: aiResult.itemName || "",
-      author: aiResult.author || "",          // 🌟 回傳作者
+      author: aiResult.author || "",
       barcode: aiResult.barcode || "",
       category: aiResult.category || "出版品與佛藝書籍"
     };
@@ -117,7 +117,6 @@ function callGeminiVisionRecognition(base64Data, mimeType) {
     return { itemName: "", author: "", barcode: "", category: "出版品與佛藝書籍" };
   }
 
-// 🌟 優先使用輕量分流通道路線，大幅避開尖峰 503
   const candidateModels = [
     "gemini-flash-lite-latest",
     "gemini-3.5-flash-lite",
@@ -172,7 +171,7 @@ function callGeminiVisionRecognition(base64Data, mimeType) {
         }
       } else if (resCode === 503 || resCode === 429) {
         writeDebugLog(`[Gemini ${model}] 伺服器忙碌 (${resCode})，正在自動切換至備援模型...`);
-        Utilities.sleep(300); // 稍候 1 秒後重試下一個模型
+        Utilities.sleep(300);
         continue;
       } else {
         writeDebugLog(`Gemini [${model}] API 回傳狀態碼異常 [${resCode}]: ${resText}`);
@@ -185,15 +184,63 @@ function callGeminiVisionRecognition(base64Data, mimeType) {
   return { itemName: "", author: "", barcode: "", category: "出版品與佛藝書籍" };
 }
 
+/**
+ * 🌟 專屬封底/條碼區域快速辨識函式
+ */
+function recognizeBarcodeOnly(base64Data, mimeType) {
+  if (!GEMINI_API_KEY) {
+    return { success: false, barcode: "" };
+  }
+
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent?key=${GEMINI_API_KEY}`;
+
+  const prompt = `你是一個專業條碼與 ISBN 辨識工具。請檢視這張照片：
+1. 找出影像中印出的 ISBN、EAN-13、或商品條碼純數字（長度通常為 10 碼或 13 碼，若有連字號請去除，僅保留純數字）。
+2. 只回傳標準 JSON 字串，格式為：{"barcode": "純數字條碼"}。若影像中完全看不出條碼則回傳 {"barcode": ""}`;
+
+  const payload = {
+    contents: [{
+      parts: [
+        { text: prompt },
+        { inlineData: { mimeType: mimeType || "image/jpeg", data: base64Data } }
+      ]
+    }],
+    generationConfig: { responseMimeType: "application/json" }
+  };
+
+  try {
+    const response = UrlFetchApp.fetch(endpoint, {
+      method: "post",
+      contentType: "application/json",
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true
+    });
+
+    if (response.getResponseCode() === 200) {
+      const resJson = JSON.parse(response.getContentText());
+      if (resJson.candidates && resJson.candidates[0].content && resJson.candidates[0].content.parts[0].text) {
+        const rawJson = resJson.candidates[0].content.parts[0].text;
+        const parsed = JSON.parse(rawJson);
+        return { success: true, barcode: (parsed.barcode || "").replace(/[^0-9]/g, "") };
+      }
+    } else {
+      writeDebugLog(`[recognizeBarcodeOnly] API 異常: ${response.getContentText()}`);
+    }
+  } catch (err) {
+    writeDebugLog("[recognizeBarcodeOnly] 錯誤: " + err.message);
+  }
+
+  return { success: false, barcode: "" };
+}
 
 /**
- * 網頁步驟 2：確認建檔 ➔ 派發流水號 ➔ 寫入 SKU_MASTER (規格或作者欄位)
+ * 網頁步驟 2：確認建檔 ➔ 派發流水號 ➔ 寫入 SKU_MASTER
  */
 function createSkuMasterItem(data) {
   try {
     const newSku = appendSkuMasterRecord({
       name: data.itemName,
-      author: data.author || "",              // 🌟 傳遞作者至 4_Database.js 的「規格或作者」欄位
+      author: data.author || "",
       category: data.category,
       barcode: data.barcode || "",
       imageUrl: data.imageUrl || ""
@@ -254,32 +301,27 @@ function handleLineMessage(event) {
   const myDept = currentVolunteer['隸屬組織/部門'] || "基本志工";
   const myTitle = currentVolunteer['職稱/身份'] || "志工";
 
-  // 👤 點擊圖文選單的「身份綁定」
   if (userMessage === '綁定身份') {
     replyTextMessage(replyToken, `💡 溫馨提醒：\n${myName} 您好，您已完成志工身份認證！\n\n編號：[${myUserId}]\n單位：${myDept}\n職稱：${myTitle}\n\n您的權限已開通，請點選「📸 拍照入庫」或「📷 開始盤點」進行作業！🙏`);
     return;
   }
 
-  // 📖 點擊「盤點說明」時發送指南手冊卡片
   if (userMessage === '盤點說明' || userMessage === '說明' || userMessage.toLowerCase() === 'help') {
     replyFlexManualCard(replyToken, myName);
     return;
   }
 
-  // 🚪 結束盤點圖文發送
   if (userMessage === CMD_EXIT_STOCKTAKE || userMessage === '結束盤點') {
     cache.remove(lineUid);
     replyExitStocktakeWithImage(replyToken, myName);
     return;
   }
 
-  // 📸 點擊圖文選單的「拍照入庫」
   if (userMessage === '拍照入庫' || userMessage === CMD_TRIGGER_PHOTO_INBOUND) {
     replyFlexInboundPromptCard(replyToken, myName);
     return;
   }
 
-  // 🚀 關鍵字：開始盤點 或更換據點指令
   if (userMessage === '開始盤點' || userMessage === CMD_CHANGE_SITE || !cachedState) {
     const sites = getAllSites(); 
     if (sites.length === 0) {
@@ -295,20 +337,17 @@ function handleLineMessage(event) {
 
   const session = JSON.parse(cachedState);
 
-  // 🌟 全域優先攔截「返回按鈕」
   if (userMessage.startsWith(BTN_BACK_PREFIX)) {
     handleGoBack(replyToken, lineUid, session, myName);
     return;
   }
 
-  // 🌟 全域優先攔截「系統操作與更正指令」
   if (isSystemControlCommand(userMessage)) {
     handleSystemCommand(replyToken, lineUid, session, userMessage, myName);
     return;
   }
   
   switch (session.state) {
-    // 🏛️ 狀態 0：選擇據點 ➔ 導向選擇「樓層」
     case 'STATE_CHOOSE_SITE':
       const selectedSite = userMessage;
       const floors = getFloorsBySite(selectedSite);
@@ -325,7 +364,6 @@ function handleLineMessage(event) {
       replyFlexMenuCard(replyToken, "🏛️ 選擇所在樓層", `已選擇據點：${selectedSite}\n請點選所在【樓層】：`, floorItems, `↩️ 返回 [選擇據點]`);
       break;
 
-    // 🏢 狀態 0.5：選擇樓層 ➔ 導向選擇「詳細空間」
     case 'STATE_CHOOSE_FLOOR':
       const selectedFloor = userMessage;
       const details = getDetailsBySiteAndFloor(session.siteName, selectedFloor);
@@ -342,7 +380,6 @@ function handleLineMessage(event) {
       replyFlexMenuCard(replyToken, "🏢 選擇具體空間", `已選擇：${session.siteName} ${selectedFloor}\n請點選具體【空間/展示區】：`, spaceItems, `↩️ 返回 [${session.siteName} 樓層]`);
       break;
 
-    // 📍 狀態 1：選擇詳細空間 ➔ 導向選擇「櫃位分區」
     case 'STATE_CHOOSE_LOC':
       const locId = userMessage.toUpperCase();
       const zones = getZonesByLocation(locId); 
@@ -362,7 +399,6 @@ function handleLineMessage(event) {
       replyFlexMenuCard(replyToken, "🗄️ 選擇櫃位區域", `已定位空間：【${spaceName}】\n請點選要盤點的【櫃位/區域】：`, zoneItems, `↩️ 返回 [${session.floorName || "樓層空間"}]`);
       break;
 
-    // 🗄️ 狀態 2：選擇櫃位分區 ➔ 導向選擇「櫃子」
     case 'STATE_CHOOSE_ZONE':
       const zoneId = userMessage.toUpperCase();
       const boxes = parseBoxesFromZone(zoneId); 
@@ -381,7 +417,6 @@ function handleLineMessage(event) {
       replyFlexMenuCard(replyToken, "🗃️ 選擇盤點櫃子", `已鎖定：【${zoneName}】\n請點選要盤點的【櫃子】：`, boxItems, `↩️ 返回 [${session.spaceName || "空間清單"}]`);
       break;
       
-    // 🗃️ 狀態 3：選擇櫃子 ➔ 導向選擇「層格」
     case 'STATE_CHOOSE_BOX':
       const selectedBoxStr = userMessage;
       const selectedBoxId = selectedBoxStr.split('-')[0].toUpperCase().trim();
@@ -400,7 +435,6 @@ function handleLineMessage(event) {
       replyFlexMenuCard(replyToken, "🚪 選擇盤點層格", `已對齊櫃體：【${selectedBoxStr}】\n請點選具體【層格】：`, shelfItems, `↩️ 返回 [${session.zoneName || "櫃位分區"}]`);
       break;
       
-    // 📍 狀態 4：鎖定層格 ➔ 呈現定位卡片
     case 'STATE_CHOOSE_CELL':
       let cellCode = userMessage.toUpperCase().trim();
       const validShelves = parseShelvesFromBox(session.zoneId, session.boxId);
@@ -421,13 +455,11 @@ function handleLineMessage(event) {
       replyFlexSearchPromptCard(replyToken, session.spaceName, session.boxName, matchedShelf.name, cellCode, false);
       break;
       
-    // 📦 狀態 5：搜尋在庫物資
     case 'STATE_INPUT_SKU':
       const skus = findSKU(userMessage);
       session.pendingItemName = userMessage;
       
       if (skus.length === 0) {
-        // 查無品項引導至前置拍照建檔網頁
         replyFlexInboundPromptCard(replyToken, myName);
         return;
       }
@@ -447,7 +479,6 @@ function handleLineMessage(event) {
       replyTextMessage(replyToken, `📦 已選定物資：【${session.itemName}】\n編號：${session.skuId}\n\n請在對話框中直接輸入本次盤點的【實清數量】數字（例如：5）：`);
       break;  
 
-    // 🔢 狀態 6：輸入實清數量並獨立更新該格位庫存
     case 'STATE_INPUT_QTY':
       if (userMessage === session.skuId) {
         replyTextMessage(replyToken, `請在對話框中直接輸入本次盤點的【實清數量】數字（例如：5）：`);
@@ -476,7 +507,6 @@ function handleLineMessage(event) {
       }
       break;
 
-    // 🌟 狀態 8-A：更正品項名稱
     case 'STATE_CORRECT_ITEM_NAME':
       const newCorrectName = userMessage;
       correctLastItemName(session.lastSkuId, newCorrectName, session.cellCode);
@@ -489,7 +519,6 @@ function handleLineMessage(event) {
       replyCorrectionSuccessWithMonk(replyToken, myName, locTextName, session.cellCode, newCorrectName, session.lastQty, session.boxName, `品項名稱已更新為【${newCorrectName}】！`);
       break;
 
-    // 🌟 狀態 8-B：更正實清數量
     case 'STATE_CORRECT_QTY':
       const newCorrectQty = parseInt(userMessage, 10);
       if (isNaN(newCorrectQty) || newCorrectQty < 0) {
@@ -506,7 +535,6 @@ function handleLineMessage(event) {
       replyCorrectionSuccessWithMonk(replyToken, myName, locTextQty, session.cellCode, session.lastItemName, newCorrectQty, session.boxName, `實清數量已更正為【${newCorrectQty} 本/套】！`);
       break;
 
-    // 🌟 狀態 7：盤點後連續作業導航控制器
     case 'STATE_POST_STOCKTAKE':
       handleSystemCommand(replyToken, lineUid, session, userMessage, myName);
       break;
