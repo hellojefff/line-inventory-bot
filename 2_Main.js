@@ -69,7 +69,7 @@ function getCategoriesForFrontend() {
 }
 
 /**
- * 網頁步驟 1：接收相片 Base64 ➔ 存入 Drive (INBOUND_IMG_FOLDER_ID) ➔ 調用 Gemini 辨識品名
+ * 網頁步驟 1：接收相片 Base64 ➔ 存入 Drive ➔ 調用 Gemini 辨識品名
  */
 function uploadAndAnalyzeImage(base64Data, mimeType) {
   try {
@@ -84,8 +84,8 @@ function uploadAndAnalyzeImage(base64Data, mimeType) {
     
     const folder = DriveApp.getFolderById(INBOUND_IMG_FOLDER_ID);
     const file = folder.createFile(blob);
-    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
     
+    // 🌟 移除引發錯誤的 file.setSharing，因為資料夾已繼承公開檢視權限
     const fileUrl = `https://drive.google.com/uc?id=${file.getId()}`;
 
     // 2. 調用 Gemini 辨識封面內容
