@@ -19,6 +19,7 @@ const MONK_IMG_URL = 'https://raw.githubusercontent.com/hellojefff/line-inventor
 const FINISH_IMG_URL = 'https://raw.githubusercontent.com/hellojefff/line-inventory-bot/main/assets/finish.png'; 
 
 // 系統核心控制指令常數
+const CMD_TRIGGER_PHOTO_INBOUND = 'CMD_TRIGGER_PHOTO_INBOUND';
 const CMD_NEXT_SKU_SAME_CELL = 'CMD_NEXT_SKU_SAME_CELL';
 const CMD_CHANGE_SHELF_SAME_BOX = 'CMD_CHANGE_SHELF_SAME_BOX';
 const CMD_CHANGE_BOX_SAME_ROOM = 'CMD_CHANGE_BOX_SAME_ROOM';
