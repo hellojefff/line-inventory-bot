@@ -5,14 +5,13 @@
 // ==================== 全局環境變數讀取 (安全架構) ====================
 const scriptProperties = PropertiesService.getScriptProperties();
 
-const SPREADSHEET_ID = scriptProperties.getProperty('SPREADSHEET_ID') ;
+const SPREADSHEET_ID = scriptProperties.getProperty('SPREADSHEET_ID') || '13J32Ewv0PVL8o6hEoJUCuK2Ur5pBEnHO90tdG7XxtC8';
 const LINE_ACCESS_TOKEN = scriptProperties.getProperty('LINE_ACCESS_TOKEN');
 const GEMINI_API_KEY = scriptProperties.getProperty('GEMINI_API_KEY');
 const INBOUND_IMG_FOLDER_ID = scriptProperties.getProperty('INBOUND_IMG_FOLDER_ID');
-const WEB_APP_URL = scriptProperties.getProperty('WEB_APP_URL');// 🌟 網頁作業網址
+const WEB_APP_URL = scriptProperties.getProperty('WEB_APP_URL') ;
+
 const BTN_BACK_PREFIX = '↩️ 返回';
-
-
 
 // 🌟 GitHub Raw 圖片直連網址配置
 const MONK_IMG_URL = 'https://raw.githubusercontent.com/hellojefff/line-inventory-bot/main/assets/monk_stocktake.png'; 

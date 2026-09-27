@@ -14,46 +14,17 @@ function isSystemControlCommand(msg) {
     CMD_CORRECT_NAME,
     CMD_CORRECT_QTY,
     CMD_DELETE_LAST_LOG,
-    CMD_TRIGGER_PHOTO_INBOUND,
-    CMD_CONFIRM_AI_INBOUND,
-    CMD_EDIT_AI_INBOUND,
-    CMD_RETAKE_PHOTO_INBOUND
+    CMD_TRIGGER_PHOTO_INBOUND
   ];
   return commands.includes(msg);
 }
 
 function handleSystemCommand(replyToken, lineUid, session, userMessage, userName) {
   const cache = CacheService.getUserCache();
-  const currentVolunteer = getVolunteerByLineUid(lineUid);
 
-  // 拍照入庫：確認 AI 辨識無誤直接建檔
-  if (userMessage === CMD_CONFIRM_AI_INBOUND) {
-    finalizeInboundSku(
-      replyToken, 
-      lineUid, 
-      session, 
-      currentVolunteer, 
-      session.aiParsedName, 
-      session.aiParsedCategory, 
-      session.aiParsedIsbn, 
-      session.tempImageUrl
-    );
-    return;
-  }
-
-  // 拍照入庫：手動修改辨識品名
-  if (userMessage === CMD_EDIT_AI_INBOUND) {
-    session.state = 'STATE_INBOUND_EDIT_NAME';
-    cache.put(lineUid, JSON.stringify(session), 1200);
-    replyTextMessage(replyToken, `✏️ 請在下方對話框直接輸入【正確完整的品名與規格】：\n(目前辨識：${session.aiParsedName || "無"})`);
-    return;
-  }
-
-  // 拍照入庫：重新拍照
-  if (userMessage === CMD_RETAKE_PHOTO_INBOUND) {
-    session.state = 'STATE_INBOUND_WAIT_PHOTO';
-    cache.put(lineUid, JSON.stringify(session), 1200);
-    replyTextMessage(replyToken, `📷 請重新拍攝物資封面或標籤上傳：`);
+  // 0. 盤點中觸發拍照前置建檔
+  if (userMessage === CMD_TRIGGER_PHOTO_INBOUND) {
+    replyFlexInboundPromptCard(replyToken, userName);
     return;
   }
 
@@ -104,7 +75,7 @@ function handleSystemCommand(replyToken, lineUid, session, userMessage, userName
     return;
   }
 
-  // 7. 重新搜尋關鍵字指令
+  // 5. 重新搜尋關鍵字指令
   if (userMessage === CMD_RETRY_SEARCH_SKU) {
     session.state = 'STATE_INPUT_SKU';
     cache.put(lineUid, JSON.stringify(session), 1200);
@@ -112,13 +83,13 @@ function handleSystemCommand(replyToken, lineUid, session, userMessage, userName
     return;
   }
 
-  // 8. 啟動即時補救與更正流程
+  // 6. 啟動即時補救與更正流程
   if (userMessage === CMD_START_CORRECTION) {
     replyFlexCorrectionMenu(replyToken, session.lastItemName, session.lastQty);
     return;
   }
 
-  // 8-A. 選擇修改品名
+  // 6-A. 選擇修改品名
   if (userMessage === CMD_CORRECT_NAME) {
     session.state = 'STATE_CORRECT_ITEM_NAME';
     cache.put(lineUid, JSON.stringify(session), 1200);
@@ -126,7 +97,7 @@ function handleSystemCommand(replyToken, lineUid, session, userMessage, userName
     return;
   }
 
-  // 8-B. 選擇更正數量
+  // 6-B. 選擇更正數量
   if (userMessage === CMD_CORRECT_QTY) {
     session.state = 'STATE_CORRECT_QTY';
     cache.put(lineUid, JSON.stringify(session), 1200);
@@ -134,7 +105,7 @@ function handleSystemCommand(replyToken, lineUid, session, userMessage, userName
     return;
   }
 
-  // 8-C. 刪除剛才這筆紀錄
+  // 6-C. 刪除剛才這筆紀錄
   if (userMessage === CMD_DELETE_LAST_LOG) {
     deleteLastRecord(session.cellCode, session.lastSkuId);
     session.state = 'STATE_INPUT_SKU';
@@ -149,31 +120,6 @@ function handleGoBack(replyToken, lineUid, session, userName) {
   const cache = CacheService.getUserCache();
 
   switch (session.state) {
-    case 'STATE_INBOUND_WAIT_PHOTO':
-    case 'STATE_INBOUND_CONFIRM_AI':
-    case 'STATE_INBOUND_EDIT_NAME':
-      if (session.originContext && session.originContext.isFromStocktake) {
-        const origin = session.originContext;
-        session.siteName = origin.siteName;
-        session.floorName = origin.floorName;
-        session.locId = origin.locId;
-        session.spaceName = origin.spaceName;
-        session.zoneId = origin.zoneId;
-        session.zoneName = origin.zoneName;
-        session.boxId = origin.boxId;
-        session.boxName = origin.boxName;
-        session.shelfName = origin.shelfName;
-        session.cellCode = origin.cellCode;
-        session.state = 'STATE_INPUT_SKU';
-        session.originContext = null;
-        cache.put(lineUid, JSON.stringify(session), 1200);
-        replyFlexSearchPromptCard(replyToken, session.spaceName, session.boxName, session.shelfName, session.cellCode, false);
-      } else {
-        cache.remove(lineUid);
-        replyTextMessage(replyToken, "已取消入庫操作，返回主畫面。");
-      }
-      break;
-
     case 'STATE_INPUT_SKU':
     case 'STATE_CONFIRM_CREATE_SKU':
       const currentBoxShelves = parseShelvesFromBox(session.zoneId || "", session.boxId || "");
