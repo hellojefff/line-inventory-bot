@@ -702,7 +702,15 @@ function replyFlexSkuVerticalList(replyToken, skus) {
     const itemName = s['物品名稱'] ? s['物品名稱'].toString().trim() : "未知名稱";
     const cateName = (s['大類名稱'] || s['大類'] || "一般物資").toString().trim();
     const barcode = (s['條碼編號'] || s['ISBN/條碼'] || "").toString().trim();
-    const rawImgUrl = (s['封面圖片URL'] || s['圖片網址'] || "").toString().trim();
+    let rawImgUrl = (s['封面圖片URL'] || s['圖片網址'] || "").toString().trim();
+
+    // 🌟 將 Google Drive 轉向網址轉換為 LINE 相容性最高的 CDN 直連格式
+    if (rawImgUrl.includes("drive.google.com")) {
+      const match = rawImgUrl.match(/id=([a-zA-Z0-9_-]+)/) || rawImgUrl.match(/\/d\/([a-zA-Z0-9_-]+)/);
+      if (match && match[1]) {
+        rawImgUrl = `https://lh3.googleusercontent.com/d/${match[1]}`;
+      }
+    }
 
     // 1. 組裝右側文字內容
     const infoContents = [
@@ -731,7 +739,7 @@ function replyFlexSkuVerticalList(replyToken, skus) {
       }
     ];
 
-    // 🌟 條碼條件渲染：有條碼才顯示藍色小標籤
+    // 條碼條件渲染
     if (barcode) {
       infoContents.push({
         "type": "box",
@@ -749,7 +757,7 @@ function replyFlexSkuVerticalList(replyToken, skus) {
       });
     }
 
-    // 2. 封面圖條件渲染：有圖片網址才以橫向左右排版呈現縮圖
+    // 2. 封面圖條件渲染
     let topSection;
     if (rawImgUrl && (rawImgUrl.startsWith("http://") || rawImgUrl.startsWith("https://"))) {
       topSection = {
@@ -782,7 +790,6 @@ function replyFlexSkuVerticalList(replyToken, skus) {
       };
     }
 
-    // 3. 單品卡片元件封裝
     return {
       "type": "box",
       "layout": "vertical",
@@ -864,6 +871,30 @@ function replyFlexSkuVerticalList(replyToken, skus) {
       "contents": flexContents
     }]
   });
+}
+
+/**
+ * 發送訊息至 LINE（含詳細錯誤排查日誌）
+ */
+function sendToLine(payload) {
+  const url = 'https://api.line.me/v2/bot/message/reply';
+  const options = {
+    method: 'post',
+    contentType: 'application/json',
+    headers: { Authorization: `Bearer ${LINE_ACCESS_TOKEN}` },
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true
+  };
+  
+  try {
+    const res = UrlFetchApp.fetch(url, options);
+    const code = res.getResponseCode();
+    if (code !== 200) {
+      writeDebugLog(`[LINE API 錯誤 ${code}]: ${res.getContentText()}`);
+    }
+  } catch (err) {
+    writeDebugLog(`[LINE fetch 例外]: ${err.message}`);
+  }
 }
 
 function sendToLine(payload) {
