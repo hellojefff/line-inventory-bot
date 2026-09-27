@@ -100,9 +100,11 @@ function uploadAndAnalyzeImage(base64Data, mimeType) {
       success: true,
       imageUrl: fileUrl,
       recognizedName: aiResult.itemName || "",
+      author: aiResult.author || "",          // 🌟 帶回作者資訊
       barcode: aiResult.barcode || "",
       category: aiResult.category || "出版品與佛藝書籍"
     };
+
   } catch (err) {
     writeDebugLog("uploadAndAnalyzeImage 錯誤: " + err.message);
     return { success: false, message: err.message };
@@ -110,22 +112,23 @@ function uploadAndAnalyzeImage(base64Data, mimeType) {
 }
 
 /**
- * 調用 Gemini Vision 辨識封面品名、條碼與大類
+ * 調用 Gemini 2.5 Flash Vision 辨識封面品名、作者、條碼與大類
  */
 function callGeminiVisionRecognition(base64Data, mimeType) {
   if (!GEMINI_API_KEY) {
-    return { itemName: "", barcode: "", category: "出版品與佛藝書籍" };
+    return { itemName: "", author: "", barcode: "", category: "出版品與佛藝書籍" };
   }
 
-  // 🌟 使用支援 generateContent 的標準模型端點 (gemini-1.5-flash-latest 或 gemini-2.0-flash)
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${GEMINI_API_KEY}`;
-  
-  const prompt = `你是一個專業的圖書與佛寺物資建檔助理。請觀察這張照片：
-1. 辨識照片中的【完整書籍書名/物品品名】（例如《大智慧到彼岸》、副標題若有也可包含）。
-2. 若有看到 ISBN 或商品條碼數字，請擷取出來；若無則留空字串。
-3. 推論大類名稱（請盡量對應：出版品與佛藝書籍、宗教與儀式物品、專業影音廣播、辦公與生活家電、消耗品與雜項）。
-請務必只回傳合法的 JSON 字串，格式限定為：
-{"itemName": "品名或書名", "barcode": "ISBN或條碼", "category": "大類名稱"}`;
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+
+  const prompt = `你是一個專業的圖書與佛寺物資建檔助理。請仔細觀察這張照片：
+1. 辨識照片中的【完整書籍書名/物品品名】（例如《大智慧到彼岸》，若有副標題可一併保留）。
+2. 辨識書籍的【作者/著者/編譯者】姓名（例如「釋寬謙」、「印順導師」；若非書籍或未標明作者，請填空字串 ""）。
+3. 若有看到 ISBN 或商品條碼數字，請擷取出來；若無則填空字串 ""。
+4. 推論所屬物資大類（請對應：出版品與佛藝書籍、宗教與儀式物品、專業影音廣播、辦公與生活家電、消耗品與雜項）。
+
+請務必只回傳合法的 JSON 字串，格式嚴格限定為：
+{"itemName": "品名或書名", "author": "作者姓名", "barcode": "ISBN或條碼", "category": "大類名稱"}`;
 
   const payload = {
     contents: [{
@@ -151,22 +154,27 @@ function callGeminiVisionRecognition(base64Data, mimeType) {
     muteHttpExceptions: true
   };
 
-  const response = UrlFetchApp.fetch(endpoint, options);
-  const resCode = response.getResponseCode();
-  const resText = response.getContentText();
+  try {
+    const response = UrlFetchApp.fetch(endpoint, options);
+    const resCode = response.getResponseCode();
+    const resText = response.getContentText();
 
-  if (resCode === 200) {
-    const resJson = JSON.parse(resText);
-    if (resJson.candidates && resJson.candidates[0].content && resJson.candidates[0].content.parts[0].text) {
-      const rawJson = resJson.candidates[0].content.parts[0].text;
-      return JSON.parse(rawJson);
+    if (resCode === 200) {
+      const resJson = JSON.parse(resText);
+      if (resJson.candidates && resJson.candidates[0].content && resJson.candidates[0].content.parts[0].text) {
+        const rawJson = resJson.candidates[0].content.parts[0].text;
+        return JSON.parse(rawJson);
+      }
+    } else {
+      writeDebugLog(`Gemini API 回傳狀態碼異常 [${resCode}]: ${resText}`);
     }
-  } else {
-    writeDebugLog(`Gemini API 回傳狀態碼異常 [${resCode}]: ${resText}`);
+  } catch (err) {
+    writeDebugLog(`Gemini fetch 錯誤: ${err.message}`);
   }
 
-  return { itemName: "", barcode: "", category: "出版品與佛藝書籍" };
+  return { itemName: "", author: "", barcode: "", category: "出版品與佛藝書籍" };
 }
+
 /**
  * 網頁步驟 2：前端確認後呼叫建檔 (呼叫 4_Database.js 的 createPreStockSkuMasterWithCategory)
  */
