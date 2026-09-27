@@ -117,10 +117,11 @@ function callGeminiVisionRecognition(base64Data, mimeType) {
     return { itemName: "", barcode: "", category: "出版品與佛藝書籍" };
   }
 
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+  // 🌟 使用支援 generateContent 的標準模型端點 (gemini-1.5-flash-latest 或 gemini-2.0-flash)
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${GEMINI_API_KEY}`;
   
   const prompt = `你是一個專業的圖書與佛寺物資建檔助理。請觀察這張照片：
-1. 辨識照片中的【完整書籍書名/物品品名】（例如《踏上成佛之道》、副標題若有也可包含）。
+1. 辨識照片中的【完整書籍書名/物品品名】（例如《大智慧到彼岸》、副標題若有也可包含）。
 2. 若有看到 ISBN 或商品條碼數字，請擷取出來；若無則留空字串。
 3. 推論大類名稱（請盡量對應：出版品與佛藝書籍、宗教與儀式物品、專業影音廣播、辦公與生活家電、消耗品與雜項）。
 請務必只回傳合法的 JSON 字串，格式限定為：
@@ -166,7 +167,6 @@ function callGeminiVisionRecognition(base64Data, mimeType) {
 
   return { itemName: "", barcode: "", category: "出版品與佛藝書籍" };
 }
-
 /**
  * 網頁步驟 2：前端確認後呼叫建檔 (呼叫 4_Database.js 的 createPreStockSkuMasterWithCategory)
  */
