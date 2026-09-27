@@ -1,7 +1,7 @@
 /**
  * 模組 4：資料庫與試算表操作層 (4_Database.js)
  * 核心功能：
- * 1. 零庫存前置建檔 (嚴格僅寫入 SKU_MASTER，依大類代碼生成前綴流水號)
+ * 1. 零庫存前置建檔 (嚴格僅寫入 SKU_MASTER，依大類代碼生成前綴流水號，記錄作者/規格)
  * 2. 讀取 CATEGORY_MASTER 提供網頁大類下拉選單
  * 3. 獨立格位庫存盤點與補救更正機制 (LockService 防併發)
  * 4. 據點、空間、櫃位、層格之階層結構查詢與志工雙重認證
@@ -13,7 +13,6 @@
 
 /**
  * 讀取 CATEGORY_MASTER 的所有大類清單
- * 支援合併儲存格、空列容錯與表頭定位
  */
 function getCategoryMasterList() {
   try {
@@ -39,7 +38,6 @@ function getCategoryMasterList() {
       const code = data[i][effectiveCodeIdx] ? data[i][effectiveCodeIdx].toString().trim() : "";
       const name = data[i][effectiveNameIdx] ? data[i][effectiveNameIdx].toString().trim() : "";
       
-      // 只要兩者皆有值就收錄（避開說明欄跳行所產生的空列）
       if (code && name) {
         list.push({ code: code, name: name });
       }
@@ -52,17 +50,30 @@ function getCategoryMasterList() {
 }
 
 /**
- * 零庫存前置建檔：依大類代碼生成流水號並寫入 SKU_MASTER
- * 嚴格只寫入 SKU_MASTER，絕不更新 CURRENT_STOCK 或寫入 STOCKTAKE_LOG
+ * 前端 Web App 寫入主檔核心函式：appendSkuMasterRecord
+ * 支援規格或作者、動態對齊欄位、生成 H0000001 格式流水號
  */
-function createPreStockSkuMasterWithCategory(itemName, categoryCode, categoryName, imageUrl = "", barcode = "") {
-  const cleanName = itemName.trim();
+function appendSkuMasterRecord(data) {
+  const cleanName = (data.name || data.itemName || "").trim();
   if (!cleanName) {
-    return { success: false, message: "品項名稱不得為空" };
+    throw new Error("物品名稱不得為空");
   }
-  if (!categoryCode || !categoryName) {
-    return { success: false, message: "請選擇正確的物資大類" };
+
+  const categoryName = (data.category || "").trim();
+  let categoryCode = (data.categoryCode || "").trim();
+
+  // 若未傳入大類代碼，自動由 CATEGORY_MASTER 清單或名稱推導
+  if (!categoryCode) {
+    const categories = getCategoryMasterList();
+    const matched = categories.find(c => c.name === categoryName || categoryName.includes(c.name));
+    if (matched) {
+      categoryCode = matched.code;
+    } else {
+      const matchParen = categoryName.match(/\(([A-Za-z0-9]+)\)/);
+      categoryCode = matchParen ? matchParen[1] : "H";
+    }
   }
+  categoryCode = (categoryCode || "H").toUpperCase().trim().replace(/[^A-Z0-9]/g, "");
 
   const lock = LockService.getScriptLock();
   try {
@@ -70,53 +81,53 @@ function createPreStockSkuMasterWithCategory(itemName, categoryCode, categoryNam
     const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
     const sheet = ss.getSheetByName("SKU_MASTER");
     if (!sheet) {
-      return { success: false, message: "找不到 SKU_MASTER 資料表" };
+      throw new Error("找不到 SKU_MASTER 資料表");
     }
 
-    const data = sheet.getDataRange().getValues();
-    const headers = data[0];
+    const rows = sheet.getDataRange().getValues();
+    const headers = rows[0].map(h => h ? h.toString().trim() : "");
+
     const skuIdIdx = headers.indexOf('品項編號');
-    const itemNameIdx = headers.indexOf('物品名稱');
-    const cateNameIdx = headers.indexOf('大類名稱') !== -1 ? headers.indexOf('大類名稱') : headers.indexOf('大類');
     const cateCodeIdx = headers.indexOf('大類代碼');
-    const barcodeIdx = headers.indexOf('ISBN/條碼');
-    const imgIdx = headers.indexOf('封面圖片URL');
+    const cateNameIdx = headers.indexOf('大類名稱') !== -1 ? headers.indexOf('大類名稱') : headers.indexOf('大類');
+    const itemNameIdx = headers.indexOf('物品名稱');
+    const specAuthorIdx = headers.indexOf('規格或作者') !== -1 ? headers.indexOf('規格或作者') : headers.indexOf('規格/作者');
+    const unitIdx = headers.indexOf('單位');
+    const barcodeIdx = headers.indexOf('條碼編號') !== -1 ? headers.indexOf('條碼編號') : headers.indexOf('ISBN/條碼');
+    const imgIdx = headers.indexOf('封面圖片URL') !== -1 ? headers.indexOf('封面圖片URL') : headers.indexOf('圖片網址');
+    const sourceIdx = headers.indexOf('建檔來源');
+    const creatorIdx = headers.indexOf('建立人員');
+    const timeIdx = headers.indexOf('建立時間');
 
     if (skuIdIdx === -1 || itemNameIdx === -1) {
-      return { success: false, message: "SKU_MASTER 缺少必要欄位 (品項編號 / 物品名稱)" };
+      throw new Error("SKU_MASTER 缺少必要欄位 (品項編號 / 物品名稱)");
     }
 
-    // 1. 查重比對：品名完全相同者避免重複建檔
+    // 1. 查重比對：品名完全相同者直接回傳，若已有資料但缺圖則補上
     const normalizedTarget = cleanName.replace(/\s+/g, "").toLowerCase();
-    for (let i = 1; i < data.length; i++) {
-      const existingName = data[i][itemNameIdx] ? data[i][itemNameIdx].toString().replace(/\s+/g, "").toLowerCase() : "";
+    for (let i = 1; i < rows.length; i++) {
+      const existingName = rows[i][itemNameIdx] ? rows[i][itemNameIdx].toString().replace(/\s+/g, "").toLowerCase() : "";
       if (existingName === normalizedTarget) {
-        // 若已存在但原本無圖片，則補齊封面
-        if (imgIdx !== -1 && !data[i][imgIdx] && imageUrl) {
-          sheet.getRange(i + 1, imgIdx + 1).setValue(imageUrl);
+        if (imgIdx !== -1 && !rows[i][imgIdx] && data.imageUrl) {
+          sheet.getRange(i + 1, imgIdx + 1).setValue(data.imageUrl);
         }
         return {
-          success: true,
-          skuId: data[i][skuIdIdx].toString(),
-          itemName: data[i][itemNameIdx].toString(),
-          cateName: cateNameIdx !== -1 ? data[i][cateNameIdx].toString() : categoryName,
-          categoryCode: cateCodeIdx !== -1 ? data[i][cateCodeIdx].toString() : categoryCode,
-          barcode: barcodeIdx !== -1 ? data[i][barcodeIdx].toString() : "",
-          imageUrl: imgIdx !== -1 ? data[i][imgIdx].toString() : imageUrl,
+          id: rows[i][skuIdIdx].toString(),
+          name: rows[i][itemNameIdx].toString(),
           isExisting: true
         };
       }
     }
 
-    // 2. 依【大類代碼】計算流水號（格式如：BK-001 或 B-001）
+    // 2. 嚴謹計算該大類最大流水號 (格式如：H0000001)
     let maxSerial = 0;
-    const prefix = categoryCode.toUpperCase().trim() + '-';
+    const prefixRegex = new RegExp(`^${categoryCode}-?(\\d+)$`, 'i');
 
-    for (let i = 1; i < data.length; i++) {
-      const currentSku = data[i][skuIdIdx] ? data[i][skuIdIdx].toString().trim().toUpperCase() : "";
-      if (currentSku.startsWith(prefix)) {
-        const numPart = currentSku.replace(prefix, "");
-        const parsedNum = parseInt(numPart, 10);
+    for (let i = 1; i < rows.length; i++) {
+      const currentSku = rows[i][skuIdIdx] ? rows[i][skuIdIdx].toString().trim() : "";
+      const match = currentSku.match(prefixRegex);
+      if (match) {
+        const parsedNum = parseInt(match[1], 10);
         if (!isNaN(parsedNum) && parsedNum > maxSerial) {
           maxSerial = parsedNum;
         }
@@ -124,34 +135,56 @@ function createPreStockSkuMasterWithCategory(itemName, categoryCode, categoryNam
     }
 
     const nextSerial = maxSerial + 1;
-    const newSkuId = prefix + String(nextSerial).padStart(3, '0');
+    const newSkuId = `${categoryCode}${String(nextSerial).padStart(7, '0')}`;
+    const timestamp = Utilities.formatDate(new Date(), "GMT+8", "yyyy-MM-dd HH:mm:ss");
 
-    // 3. 寫入 SKU_MASTER 主檔
+    // 3. 組裝寫入列
     const newRow = new Array(headers.length).fill("");
     newRow[skuIdIdx] = newSkuId;
-    newRow[itemNameIdx] = cleanName;
     if (cateCodeIdx !== -1) newRow[cateCodeIdx] = categoryCode;
     if (cateNameIdx !== -1) newRow[cateNameIdx] = categoryName;
-    if (barcodeIdx !== -1) newRow[barcodeIdx] = barcode || "";
-    if (imgIdx !== -1) newRow[imgIdx] = imageUrl || "";
+    newRow[itemNameIdx] = cleanName;
+    if (specAuthorIdx !== -1) newRow[specAuthorIdx] = data.author || data.spec || "";
+    if (unitIdx !== -1) newRow[unitIdx] = data.unit || "本";
+    if (barcodeIdx !== -1) newRow[barcodeIdx] = data.barcode || "";
+    if (imgIdx !== -1) newRow[imgIdx] = data.imageUrl || "";
+    if (sourceIdx !== -1) newRow[sourceIdx] = data.source || "LINE拍照入庫";
+    if (creatorIdx !== -1) newRow[creatorIdx] = data.creator || "系統建檔";
+    if (timeIdx !== -1) newRow[timeIdx] = timestamp;
 
     sheet.appendRow(newRow);
 
     return {
-      success: true,
-      skuId: newSkuId,
-      itemName: cleanName,
-      cateName: categoryName,
-      categoryCode: categoryCode,
-      barcode: barcode || "",
-      imageUrl: imageUrl,
+      id: newSkuId,
+      name: cleanName,
       isExisting: false
     };
-  } catch (e) {
-    writeDebugLog("createPreStockSkuMasterWithCategory 失敗: " + e.message);
-    return { success: false, message: "建檔失敗: " + e.message };
   } finally {
     lock.releaseLock();
+  }
+}
+
+/**
+ * 相容既有直接呼叫之包裝
+ */
+function createPreStockSkuMasterWithCategory(itemName, categoryCode, categoryName, imageUrl = "", barcode = "", author = "") {
+  try {
+    const res = appendSkuMasterRecord({
+      name: itemName,
+      categoryCode: categoryCode,
+      category: categoryName,
+      imageUrl: imageUrl,
+      barcode: barcode,
+      author: author
+    });
+    return {
+      success: true,
+      skuId: res.id,
+      itemName: res.name,
+      isExisting: res.isExisting
+    };
+  } catch (err) {
+    return { success: false, message: err.message };
   }
 }
 
@@ -179,7 +212,7 @@ function executeUpdateStockWorkflow(userId, cellCode, skuId, itemName, qty) {
     const nextLogId = 'LOG-' + String(logSheet.getLastRow()).padStart(3, '0');
     logSheet.appendRow([nextLogId, new Date(), userId, cellCode, skuId, itemName, qty]);
 
-    // 2. 更新當前庫存表 CURRENT_STOCK (模式 1：依 cellCode + skuId 獨立更新)
+    // 2. 更新當前庫存表 CURRENT_STOCK
     let stockSheet = ss.getSheetByName("CURRENT_STOCK");
     if (!stockSheet) {
       stockSheet = ss.insertSheet("CURRENT_STOCK");
@@ -202,7 +235,8 @@ function executeUpdateStockWorkflow(userId, cellCode, skuId, itemName, qty) {
     }
 
     if (!isRecordFound) {
-      const targetLocId = cellCode.split('-')[0] + '-' + cellCode.split('-')[1];
+      const parts = cellCode.split('-');
+      const targetLocId = parts.length >= 2 ? `${parts[0]}-${parts[1]}` : cellCode;
       const newRow = new Array(stockHeaders.length).fill("");
       
       newRow[stockHeaders.indexOf('場域編碼')] = targetLocId;
@@ -653,7 +687,8 @@ function findSKU(keyword) {
   
   const skuIdIdx = headers.indexOf('品項編號');
   const itemNameIdx = headers.indexOf('物品名稱');
-  const barcodeIdx = headers.indexOf('ISBN/條碼'); 
+  const specAuthorIdx = headers.indexOf('規格或作者') !== -1 ? headers.indexOf('規格或作者') : headers.indexOf('規格/作者');
+  const barcodeIdx = headers.indexOf('條碼編號') !== -1 ? headers.indexOf('條碼編號') : headers.indexOf('ISBN/條碼'); 
 
   const results = [];
   const searchStr = keyword.toString().toLowerCase();
@@ -662,7 +697,8 @@ function findSKU(keyword) {
     const row = data[i];
     if ((row[skuIdIdx] && row[skuIdIdx].toString().toLowerCase().includes(searchStr)) ||
         (row[itemNameIdx] && row[itemNameIdx].toString().toLowerCase().includes(searchStr)) ||
-        (row[barcodeIdx] && row[barcodeIdx].toString().toLowerCase() === searchStr)) {
+        (specAuthorIdx !== -1 && row[specAuthorIdx] && row[specAuthorIdx].toString().toLowerCase().includes(searchStr)) ||
+        (barcodeIdx !== -1 && row[barcodeIdx] && row[barcodeIdx].toString().toLowerCase() === searchStr)) {
       const skuObj = {};
       headers.forEach((header, index) => { skuObj[header] = row[index]; });
       results.push(skuObj);

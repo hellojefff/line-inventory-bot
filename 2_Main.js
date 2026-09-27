@@ -57,19 +57,22 @@ function doGet(e) {
 }
 
 /**
- * 提供前端載入下拉選單使用 (呼叫 4_Database.js 的 getCategoryMasterList)
+ * 提供前端載入下拉選單使用 (對齊 Index.html 的呼叫名稱，並保留相容別名)
  */
-function getCategoriesForFrontend() {
+function getCategoryList() {
   try {
     return getCategoryMasterList();
   } catch (e) {
-    writeDebugLog("getCategoriesForFrontend 失敗: " + e.message);
+    writeDebugLog("getCategoryList 失敗: " + e.message);
     return [];
   }
 }
+function getCategoriesForFrontend() {
+  return getCategoryList();
+}
 
 /**
- * 網頁步驟 1：接收相片 Base64 ➔ 存入 Drive ➔ 調用 Gemini 辨識品名
+ * 網頁步驟 1：接收相片 Base64 ➔ 存入 Drive ➔ 調用 Gemini 辨識品名、作者等
  */
 function uploadAndAnalyzeImage(base64Data, mimeType) {
   try {
@@ -77,34 +80,29 @@ function uploadAndAnalyzeImage(base64Data, mimeType) {
       throw new Error("系統未設定 INBOUND_IMG_FOLDER_ID 指令碼屬性");
     }
     
-    // 1. 解碼並存入 Google Drive 指定資料夾
     const decodedBytes = Utilities.base64Decode(base64Data);
     const fileName = "SKU_" + Utilities.formatDate(new Date(), "GMT+8", "yyyyMMdd_HHmmss") + ".jpg";
     const blob = Utilities.newBlob(decodedBytes, mimeType || "image/jpeg", fileName);
     
     const folder = DriveApp.getFolderById(INBOUND_IMG_FOLDER_ID);
     const file = folder.createFile(blob);
-    
-    // 🌟 移除引發錯誤的 file.setSharing，因為資料夾已繼承公開檢視權限
     const fileUrl = `https://drive.google.com/uc?id=${file.getId()}`;
 
-    // 2. 調用 Gemini 辨識封面內容
-    let aiResult = { itemName: "", barcode: "", category: "出版品與佛藝書籍" };
+    let aiResult = { itemName: "", author: "", barcode: "", category: "出版品與佛藝書籍" };
     try {
       aiResult = callGeminiVisionRecognition(base64Data, mimeType);
     } catch (aiErr) {
-      writeDebugLog("Gemini 辨識例外 (降級處理): " + aiErr.message);
+      writeDebugLog("Gemini 辨識例外: " + aiErr.message);
     }
 
     return {
       success: true,
       imageUrl: fileUrl,
       recognizedName: aiResult.itemName || "",
-      author: aiResult.author || "",          // 🌟 帶回作者資訊
+      author: aiResult.author || "",          // 🌟 回傳作者
       barcode: aiResult.barcode || "",
       category: aiResult.category || "出版品與佛藝書籍"
     };
-
   } catch (err) {
     writeDebugLog("uploadAndAnalyzeImage 錯誤: " + err.message);
     return { success: false, message: err.message };
@@ -176,10 +174,28 @@ function callGeminiVisionRecognition(base64Data, mimeType) {
 }
 
 /**
- * 網頁步驟 2：前端確認後呼叫建檔 (呼叫 4_Database.js 的 createPreStockSkuMasterWithCategory)
+ * 網頁步驟 2：確認建檔 ➔ 派發流水號 ➔ 寫入 SKU_MASTER (規格或作者欄位)
  */
-function submitConfirmedSkuMaster(itemName, categoryCode, categoryName, imageUrl, barcode) {
-  return createPreStockSkuMasterWithCategory(itemName, categoryCode, categoryName, imageUrl, barcode);
+function createSkuMasterItem(data) {
+  try {
+    const newSku = appendSkuMasterRecord({
+      name: data.itemName,
+      author: data.author || "",              // 🌟 傳遞作者至 4_Database.js 的「規格或作者」欄位
+      category: data.category,
+      barcode: data.barcode || "",
+      imageUrl: data.imageUrl || ""
+    });
+
+    const statusNote = newSku.isExisting ? "（已存在物資，已更新封面）" : "（新建物資）";
+    return { 
+      success: true, 
+      skuId: newSku.id, 
+      message: `成功建立品項：${newSku.id} ${data.itemName} ${statusNote}` 
+    };
+  } catch (err) {
+    writeDebugLog("createSkuMasterItem 錯誤: " + err.message);
+    return { success: false, message: err.message };
+  }
 }
 
 // ==================== LINE 狀態機引導邏輯 ====================
