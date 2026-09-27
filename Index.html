@@ -231,13 +231,13 @@
       });
     });
 
-    // 圖片壓縮函式（縮減傳輸體積與速度）
+    // 圖片壓縮函式（強化壓縮：長邊限制 800px，品質 0.6）
     function compressAndConvertToBase64(file, callback) {
       const reader = new FileReader();
       reader.onload = function(event) {
         const img = new Image();
         img.onload = function() {
-          const maxWidth = 1200;
+          const maxWidth = 800; // 🌟 由 1200 改為 800
           let width = img.width;
           let height = img.height;
 
@@ -252,7 +252,8 @@
           const ctx = canvas.getContext('2d');
           ctx.drawImage(img, 0, 0, width, height);
 
-          const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+          // 🌟 品質由 0.8 調整為 0.6
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
           const base64Data = dataUrl.split(',')[1];
           callback(base64Data, 'image/jpeg');
         };
@@ -260,7 +261,7 @@
       };
       reader.readAsDataURL(file);
     }
-
+    
     // 辨識成功回呼
     function handleUploadSuccess(res) {
       const statusBox = document.getElementById('statusBox');
