@@ -59,21 +59,21 @@ echo "${YELLOW}[1/4] 正在執行資安與敏感金鑰掃描...${NC}"
 
 SECRET_FOUND=false
 
-# 檢查程式碼中是否含有明文的 Gemini API Key
-if git grep -E "AIzaSy[a-zA-Z0-9_-]{33}" -- ":(exclude)sync.*" 2>/dev/null; then
+# 檢查程式碼中是否含有明文的 Gemini API Key (排除 sync 開頭與 .gitignore)
+if git grep -E "AIzaSy[a-zA-Z0-9_-]{33}" -- ":(exclude)sync*" ":(exclude).gitignore*" 2>/dev/null; then
     echo "${RED}[警告] 程式碼中偵測到明文的 Gemini API Key！${NC}"
     SECRET_FOUND=true
 fi
 
 # 檢查是否留存明文 LINE Access Token
-if git grep -E "LINE_ACCESS_TOKEN.*=.*[A-Za-z0-9+/]{40,}" -- ":(exclude)sync.*" 2>/dev/null; then
+if git grep -E "LINE_ACCESS_TOKEN.*=.*[A-Za-z0-9+/]{40,}" -- ":(exclude)sync*" ":(exclude).gitignore*" 2>/dev/null; then
     echo "${RED}[警告] 程式碼中偵測到明文的 LINE Access Token！${NC}"
     SECRET_FOUND=true
 fi
 
-# 檢查未解決的 Git 衝突標記
-CONFLICT_PATTERN="<<<<<<< HEAD"
-if git grep -F "$CONFLICT_PATTERN" -- ":(exclude)sync.*" 2>/dev/null; then
+# 檢查未解決的 Git 衝突標記（拆解字串避免 grep 誤掃到自身定義）
+CONFLICT_PATTERN=$(printf '%s%s' '<<<<<<<' ' HEAD')
+if git grep -F "$CONFLICT_PATTERN" -- ":(exclude)sync*" 2>/dev/null; then
     echo "${RED}[錯誤] 偵測到未解決的 Git 合併衝突標記！${NC}"
     exit 1
 fi
@@ -83,6 +83,7 @@ if [ "$SECRET_FOUND" = true ]; then
     exit 1
 fi
 echo "${GREEN}[通過] 安全檢查通過，未發現明文金鑰。${NC}"
+
 
 # ==============================================================================
 # 步驟 3：部署至 Google Apps Script (由 --skip-gas 控制)
