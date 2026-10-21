@@ -681,7 +681,7 @@ function replyCorrectionSuccessWithMonk(replyToken, userName, fullChineseLocatio
 }
 
 /**
- * 🌟 搜尋多筆物資直列清單：動態呈現封面與 ISBN，無資料自動隱藏
+ * 🌟 搜尋多筆物資直列清單：修復 image cornerRadius 400 錯誤
  */
 function replyFlexSkuVerticalList(replyToken, skus) {
   const skuRows = skus.map(s => {
@@ -691,7 +691,7 @@ function replyFlexSkuVerticalList(replyToken, skus) {
     const barcode = (s['條碼編號'] || s['ISBN/條碼'] || s['barcode'] || "").toString().trim();
     let rawImgUrl = (s['封面圖片URL'] || s['圖片網址'] || s['imageUrl'] || "").toString().trim();
 
-    // 🌟 將 Google Drive 轉向網址轉換為 LINE 相容性最高的 CDN 直連格式
+    // 將 Google Drive 轉向網址轉換為 LINE 相容性最高的 CDN 直連格式
     if (rawImgUrl.includes("drive.google.com")) {
       const match = rawImgUrl.match(/id=([a-zA-Z0-9_-]+)/) || rawImgUrl.match(/\/d\/([a-zA-Z0-9_-]+)/);
       if (match && match[1]) {
@@ -744,7 +744,7 @@ function replyFlexSkuVerticalList(replyToken, skus) {
       });
     }
 
-    // 2. 封面縮圖渲染
+    // 2. 封面縮圖渲染（修復 cornerRadius 問題）
     let topSection;
     if (rawImgUrl && (rawImgUrl.startsWith("http://") || rawImgUrl.startsWith("https://"))) {
       topSection = {
@@ -753,12 +753,18 @@ function replyFlexSkuVerticalList(replyToken, skus) {
         "spacing": "md",
         "contents": [
           {
-            "type": "image",
-            "url": rawImgUrl,
-            "size": "72px",
-            "aspectRatio": "3:4",
-            "aspectMode": "cover",
+            "type": "box",
+            "layout": "vertical",
             "cornerRadius": "md",
+            "contents": [
+              {
+                "type": "image",
+                "url": rawImgUrl,
+                "size": "72px",
+                "aspectRatio": "3:4",
+                "aspectMode": "cover"
+              }
+            ],
             "flex": 0
           },
           {
@@ -859,6 +865,7 @@ function replyFlexSkuVerticalList(replyToken, skus) {
     }]
   });
 }
+
 
 /**
  * 唯一的發送至 LINE 函式（具備詳細錯誤排查日誌）
