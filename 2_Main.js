@@ -458,26 +458,27 @@ function handleLineMessage(event) {
     case 'STATE_INPUT_SKU':
       const skus = findSKU(userMessage);
       session.pendingItemName = userMessage;
-      
+
       if (skus.length === 0) {
         replyFlexInboundPromptCard(replyToken, myName);
         return;
       }
-      
+
       if (skus.length > 1) {
         cache.put(lineUid, JSON.stringify(session), 1200);
         replyFlexSkuVerticalList(replyToken, skus.slice(0, 6));
         return;
       }
-      
+
+      // 🌟 命中單筆物資：設定 Session 並回傳大圖確認卡
       const targetSku = skus[0];
       session.state = 'STATE_INPUT_QTY';
-      session.skuId = targetSku['品項編號'] ? targetSku['品項編號'].toString() : "未知";
-      session.itemName = targetSku['物品名稱'] ? targetSku['物品名稱'].toString() : "未知名稱";
+      session.skuId = (targetSku['品項編號'] || targetSku['sku_id'] || targetSku['SKU_ID'] || '').toString();
+      session.itemName = (targetSku['物品名稱'] || targetSku['品名'] || targetSku['name'] || '').toString();
       cache.put(lineUid, JSON.stringify(session), 1200);
-      
-      replyTextMessage(replyToken, `📦 已選定物資：【${session.itemName}】\n編號：${session.skuId}\n\n請在對話框中直接輸入本次盤點的【實清數量】數字（例如：5）：`);
-      break;  
+
+      replyFlexConfirmSingleSkuCard(replyToken, targetSku, myName);
+      break;
 
     case 'STATE_INPUT_QTY':
       if (userMessage === session.skuId) {

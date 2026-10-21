@@ -680,26 +680,31 @@ function replyCorrectionSuccessWithMonk(replyToken, userName, fullChineseLocatio
   });
 }
 
+
 /**
- * 🌟 搜尋多筆物資直列清單：修復 image cornerRadius 400 錯誤
+ * 🌟 搜尋多筆物資直列清單：支援顯示作者、ISBN、以及點擊封面看大圖
  */
 function replyFlexSkuVerticalList(replyToken, skus) {
   const skuRows = skus.map(s => {
     const skuId = (s['品項編號'] || s['sku_id'] || s['SKU_ID'] || "未知").toString().trim();
     const itemName = (s['物品名稱'] || s['品名'] || s['name'] || "未知名稱").toString().trim();
     const cateName = (s['大類名稱'] || s['大類'] || s['category'] || "一般物資").toString().trim();
+    const author = (s['規格/作者'] || s['作者'] || s['規格'] || s['author'] || s['spec'] || "").toString().trim();
     const barcode = (s['條碼編號'] || s['ISBN/條碼'] || s['barcode'] || "").toString().trim();
     let rawImgUrl = (s['封面圖片URL'] || s['圖片網址'] || s['imageUrl'] || "").toString().trim();
 
-    // 將 Google Drive 轉向網址轉換為 LINE 相容性最高的 CDN 直連格式
+    // 🌟 轉換為 Google CDN 直連格式，並區分「列表縮圖」與「點擊高清大圖」
+    let thumbUrl = rawImgUrl;
+    let fullImgUrl = rawImgUrl;
     if (rawImgUrl.includes("drive.google.com")) {
       const match = rawImgUrl.match(/id=([a-zA-Z0-9_-]+)/) || rawImgUrl.match(/\/d\/([a-zA-Z0-9_-]+)/);
       if (match && match[1]) {
-        rawImgUrl = `https://lh3.googleusercontent.com/d/${match[1]}`;
+        thumbUrl = `https://lh3.googleusercontent.com/d/${match[1]}=w240`;    // 縮圖輕量化，秒開不卡頓
+        fullImgUrl = `https://lh3.googleusercontent.com/d/${match[1]}=w1200`; // 點擊後顯示 1200px 清晰大圖
       }
     }
 
-    // 1. 組裝文字資訊
+    // 1. 組裝右側文字資訊
     const infoContents = [
       {
         "type": "text",
@@ -716,17 +721,31 @@ function replyFlexSkuVerticalList(replyToken, skus) {
         "color": "#111827",
         "wrap": true,
         "margin": "xs"
-      },
-      {
-        "type": "text",
-        "text": `編號: ${skuId}`,
-        "size": "xs",
-        "color": "#9CA3AF",
-        "margin": "xs"
       }
     ];
 
-    // 條碼渲染
+    // 🌟 條件渲染：作者 / 規格（有資料才顯示）
+    if (author) {
+      infoContents.push({
+        "type": "text",
+        "text": `✍️ 作者: ${author}`,
+        "size": "xs",
+        "color": "#4B5563",
+        "wrap": true,
+        "margin": "xs"
+      });
+    }
+
+    // 品項編號
+    infoContents.push({
+      "type": "text",
+      "text": `編號: ${skuId}`,
+      "size": "xs",
+      "color": "#9CA3AF",
+      "margin": "xs"
+    });
+
+    // 🌟 條件渲染：ISBN / 條碼（有資料才顯示）
     if (barcode) {
       infoContents.push({
         "type": "box",
@@ -744,9 +763,9 @@ function replyFlexSkuVerticalList(replyToken, skus) {
       });
     }
 
-    // 2. 封面縮圖渲染（修復 cornerRadius 問題）
+    // 2. 封面縮圖渲染（加上點擊開啟大圖的 URI Action）
     let topSection;
-    if (rawImgUrl && (rawImgUrl.startsWith("http://") || rawImgUrl.startsWith("https://"))) {
+    if (thumbUrl && (thumbUrl.startsWith("http://") || thumbUrl.startsWith("https://"))) {
       topSection = {
         "type": "box",
         "layout": "horizontal",
@@ -756,16 +775,21 @@ function replyFlexSkuVerticalList(replyToken, skus) {
             "type": "box",
             "layout": "vertical",
             "cornerRadius": "md",
+            "flex": 0,
+            "action": {
+              "type": "uri",
+              "label": "查看大圖",
+              "uri": fullImgUrl
+            },
             "contents": [
               {
                 "type": "image",
-                "url": rawImgUrl,
+                "url": thumbUrl,
                 "size": "72px",
                 "aspectRatio": "3:4",
                 "aspectMode": "cover"
               }
-            ],
-            "flex": 0
+            ]
           },
           {
             "type": "box",
@@ -818,7 +842,7 @@ function replyFlexSkuVerticalList(replyToken, skus) {
       "backgroundColor": "#FAFAFA",
       "contents": [
         { "type": "text", "text": "📦 找到多筆物資", "weight": "bold", "size": "xl", "color": "#111827" },
-        { "type": "text", "text": "請由上往下瀏覽，點擊您要盤點的物品：", "size": "sm", "color": "#4B5563", "margin": "xs" }
+        { "type": "text", "text": "點擊左圖可放大封面，確認後點擊盤點：", "size": "sm", "color": "#4B5563", "margin": "xs" }
       ]
     },
     "body": {
@@ -865,6 +889,192 @@ function replyFlexSkuVerticalList(replyToken, skus) {
     }]
   });
 }
+
+/**
+ * 🌟 搜尋單筆命中：彈出帶有封面大圖、作者、ISBN 與數量輸入指引的確認卡片
+ */
+function replyFlexConfirmSingleSkuCard(replyToken, targetSku, userName) {
+  const skuId = (targetSku['品項編號'] || targetSku['sku_id'] || targetSku['SKU_ID'] || "未知").toString().trim();
+  const itemName = (targetSku['物品名稱'] || targetSku['品名'] || targetSku['name'] || "未知名稱").toString().trim();
+  const cateName = (targetSku['大類名稱'] || targetSku['大類'] || targetSku['category'] || "一般物資").toString().trim();
+  const author = (targetSku['規格/作者'] || targetSku['作者'] || targetSku['規格'] || targetSku['author'] || targetSku['spec'] || "").toString().trim();
+  const barcode = (targetSku['條碼編號'] || targetSku['ISBN/條碼'] || targetSku['barcode'] || "").toString().trim();
+  let rawImgUrl = (targetSku['封面圖片URL'] || targetSku['圖片網址'] || targetSku['imageUrl'] || "").toString().trim();
+
+  // 轉換 Google CDN 格式（支援點擊放大查看大圖）
+  let fullImgUrl = rawImgUrl;
+  if (rawImgUrl.includes("drive.google.com")) {
+    const match = rawImgUrl.match(/id=([a-zA-Z0-9_-]+)/) || rawImgUrl.match(/\/d\/([a-zA-Z0-9_-]+)/);
+    if (match && match[1]) {
+      fullImgUrl = `https://lh3.googleusercontent.com/d/${match[1]}=w1000`;
+    }
+  }
+
+  // 1. 組裝 Hero 大圖區塊（有圖片時顯示，點擊可看 1000px 高清原圖）
+  let heroSection = undefined;
+  if (fullImgUrl && (fullImgUrl.startsWith("http://") || fullImgUrl.startsWith("https://"))) {
+    heroSection = {
+      "type": "image",
+      "url": fullImgUrl,
+      "size": "full",
+      "aspectRatio": "3:4",
+      "aspectMode": "cover",
+      "action": {
+        "type": "uri",
+        "label": "查看封面大圖",
+        "uri": fullImgUrl
+      }
+    };
+  }
+
+  // 2. 組裝 Body 資訊區塊
+  const bodyContents = [
+    {
+      "type": "text",
+      "text": `📁 ${cateName}`,
+      "weight": "bold",
+      "size": "xs",
+      "color": "#6B7280"
+    },
+    {
+      "type": "text",
+      "text": itemName,
+      "weight": "bold",
+      "size": "xl",
+      "color": "#111827",
+      "wrap": true,
+      "margin": "xs"
+    }
+  ];
+
+  // 條件渲染：作者 / 規格
+  if (author) {
+    bodyContents.push({
+      "type": "text",
+      "text": `✍️ 作者: ${author}`,
+      "size": "sm",
+      "color": "#4B5563",
+      "wrap": true,
+      "margin": "xs"
+    });
+  }
+
+  // 品項編號
+  bodyContents.push({
+    "type": "text",
+    "text": `編號: ${skuId}`,
+    "size": "xs",
+    "color": "#9CA3AF",
+    "margin": "xs"
+  });
+
+  // 條件渲染：條碼 / ISBN
+  if (barcode) {
+    bodyContents.push({
+      "type": "box",
+      "layout": "baseline",
+      "margin": "xs",
+      "contents": [
+        {
+          "type": "text",
+          "text": `🏷️ ISBN: ${barcode}`,
+          "size": "xs",
+          "color": "#0284C7",
+          "wrap": true
+        }
+      ]
+    });
+  }
+
+  // 分隔線與輸入指引醒目標籤
+  bodyContents.push({ "type": "separator", "margin": "lg" });
+  bodyContents.push({
+    "type": "box",
+    "layout": "vertical",
+    "backgroundColor": "#FEF3C7",
+    "borderColor": "#F59E0B",
+    "borderWidth": "1px",
+    "cornerRadius": "md",
+    "paddingAll": "md",
+    "margin": "md",
+    "contents": [
+      {
+        "type": "text",
+        "text": "🔢 請在下方輸入【實清數量】：",
+        "weight": "bold",
+        "size": "sm",
+        "color": "#92400E"
+      },
+      {
+        "type": "text",
+        "text": "請直接回覆眼前看到的數字（例如：5 或 10）",
+        "size": "xs",
+        "color": "#B45309",
+        "margin": "xs"
+      }
+    ]
+  });
+
+  // 3. 封裝 Bubble
+  const bubble = {
+    "type": "bubble",
+    "header": {
+      "type": "box",
+      "layout": "vertical",
+      "backgroundColor": "#ECFDF5",
+      "contents": [
+        { "type": "text", "text": "🎯 已確認盤點物品", "weight": "bold", "size": "xl", "color": "#065F46" },
+        { "type": "text", "text": `${userName} 您好，請核對物資並填寫數量：`, "size": "sm", "color": "#047857", "margin": "xs" }
+      ]
+    },
+    "body": {
+      "type": "box",
+      "layout": "vertical",
+      "contents": bodyContents
+    },
+    "footer": {
+      "type": "box",
+      "layout": "vertical",
+      "spacing": "sm",
+      "contents": [
+        {
+          "type": "button",
+          "style": "secondary",
+          "height": "sm",
+          "action": {
+            "type": "message",
+            "label": "🔍 物品不對？重新搜尋",
+            "text": CMD_RETRY_SEARCH_SKU
+          }
+        },
+        {
+          "type": "button",
+          "style": "secondary",
+          "height": "sm",
+          "action": {
+            "type": "message",
+            "label": "🚪 結束盤點",
+            "text": CMD_EXIT_STOCKTAKE
+          }
+        }
+      ]
+    }
+  };
+
+  if (heroSection) {
+    bubble.hero = heroSection;
+  }
+
+  sendToLine({
+    replyToken: replyToken,
+    messages: [{
+      "type": "flex",
+      "altText": `🎯 已鎖定物品：${itemName}`,
+      "contents": bubble
+    }]
+  });
+}
+
 
 
 /**
