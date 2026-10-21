@@ -7,7 +7,7 @@ function replyTextMessage(replyToken, text) {
 }
 
 /**
- * 🌟 零庫存前置建檔導引卡片
+ * 零庫存前置建檔導引卡片
  */
 function replyFlexInboundPromptCard(replyToken, userName) {
   const flexContents = {
@@ -27,7 +27,7 @@ function replyFlexInboundPromptCard(replyToken, userName) {
       "contents": [
         {
           "type": "text",
-          "text": "此功能專用於【新物資前置建檔】。\n拍照後由 AI 辨識品名、作者與條碼，自動存入物資主檔 (SKU_MASTER)，不涉及任何儲位與庫存數量。",
+          "text": "此功能專用於【新物資前置建檔】。\n拍照後由 AI 辨識品名、作者與條碼，自動存入物資主檔 (SKU_MASTER)，不涉及儲位與庫存數量。",
           "size": "sm",
           "color": "#374151",
           "wrap": true
@@ -127,18 +127,7 @@ function replyFlexManualCard(replyToken, userName) {
           "paddingAll": "md",
           "contents": [
             { "type": "text", "text": "第 3 步：輸入實清數量", "weight": "bold", "size": "md", "color": "#15803D" },
-            { "type": "text", "text": "輸入眼前看到的實際數量（如：5），系統即刻更新該格位庫存！", "size": "sm", "color": "#4B5563", "margin": "xs", "wrap": true }
-          ]
-        },
-        {
-          "type": "box",
-          "layout": "vertical",
-          "backgroundColor": "#FFFBEB",
-          "cornerRadius": "md",
-          "paddingAll": "md",
-          "contents": [
-            { "type": "text", "text": "💡 貼心小提醒：", "weight": "bold", "size": "sm", "color": "#B45309" },
-            { "type": "text", "text": "• 若有全新物資尚未建檔，請點選「📷 拍照入庫」建立主檔。\n• 任何步驟皆可按「↩️ 返回」或「🚪 結束盤點」。", "size": "xs", "color": "#92400E", "margin": "xs", "wrap": true }
+            { "type": "text", "text": "輸入眼前看到的實際數量，系統即刻更新庫存！", "size": "sm", "color": "#4B5563", "margin": "xs", "wrap": true }
           ]
         }
       ]
@@ -414,7 +403,6 @@ function replyFlexPostStocktakeCard(replyToken, userName, fullChineseLocation, c
         },
         { "type": "separator", "margin": "lg" },
         { "type": "text", "text": "下一步您想要：", "weight": "bold", "size": "md", "color": "#111827", "margin": "lg" },
-        
         {
           "type": "button",
           "style": "primary",
@@ -609,7 +597,6 @@ function replyCorrectionSuccessWithMonk(replyToken, userName, fullChineseLocatio
         },
         { "type": "separator", "margin": "lg" },
         { "type": "text", "text": "下一步您想要：", "weight": "bold", "size": "md", "color": "#111827", "margin": "lg" },
-        
         {
           "type": "button",
           "style": "primary",
@@ -698,11 +685,11 @@ function replyCorrectionSuccessWithMonk(replyToken, userName, fullChineseLocatio
  */
 function replyFlexSkuVerticalList(replyToken, skus) {
   const skuRows = skus.map(s => {
-    const skuId = s['品項編號'] ? s['品項編號'].toString().trim() : "未知";
-    const itemName = s['物品名稱'] ? s['物品名稱'].toString().trim() : "未知名稱";
-    const cateName = (s['大類名稱'] || s['大類'] || "一般物資").toString().trim();
-    const barcode = (s['條碼編號'] || s['ISBN/條碼'] || "").toString().trim();
-    let rawImgUrl = (s['封面圖片URL'] || s['圖片網址'] || "").toString().trim();
+    const skuId = (s['品項編號'] || s['sku_id'] || s['SKU_ID'] || "未知").toString().trim();
+    const itemName = (s['物品名稱'] || s['品名'] || s['name'] || "未知名稱").toString().trim();
+    const cateName = (s['大類名稱'] || s['大類'] || s['category'] || "一般物資").toString().trim();
+    const barcode = (s['條碼編號'] || s['ISBN/條碼'] || s['barcode'] || "").toString().trim();
+    let rawImgUrl = (s['封面圖片URL'] || s['圖片網址'] || s['imageUrl'] || "").toString().trim();
 
     // 🌟 將 Google Drive 轉向網址轉換為 LINE 相容性最高的 CDN 直連格式
     if (rawImgUrl.includes("drive.google.com")) {
@@ -712,7 +699,7 @@ function replyFlexSkuVerticalList(replyToken, skus) {
       }
     }
 
-    // 1. 組裝右側文字內容
+    // 1. 組裝文字資訊
     const infoContents = [
       {
         "type": "text",
@@ -739,7 +726,7 @@ function replyFlexSkuVerticalList(replyToken, skus) {
       }
     ];
 
-    // 條碼條件渲染
+    // 條碼渲染
     if (barcode) {
       infoContents.push({
         "type": "box",
@@ -757,7 +744,7 @@ function replyFlexSkuVerticalList(replyToken, skus) {
       });
     }
 
-    // 2. 封面圖條件渲染
+    // 2. 封面縮圖渲染
     let topSection;
     if (rawImgUrl && (rawImgUrl.startsWith("http://") || rawImgUrl.startsWith("https://"))) {
       topSection = {
@@ -874,7 +861,7 @@ function replyFlexSkuVerticalList(replyToken, skus) {
 }
 
 /**
- * 發送訊息至 LINE（含詳細錯誤排查日誌）
+ * 唯一的發送至 LINE 函式（具備詳細錯誤排查日誌）
  */
 function sendToLine(payload) {
   const url = 'https://api.line.me/v2/bot/message/reply';
@@ -885,7 +872,6 @@ function sendToLine(payload) {
     payload: JSON.stringify(payload),
     muteHttpExceptions: true
   };
-  
   try {
     const res = UrlFetchApp.fetch(url, options);
     const code = res.getResponseCode();
@@ -895,14 +881,4 @@ function sendToLine(payload) {
   } catch (err) {
     writeDebugLog(`[LINE fetch 例外]: ${err.message}`);
   }
-}
-
-function sendToLine(payload) {
-  const url = 'https://api.line.me/v2/bot/message/reply';
-  const options = {
-    method: 'post', contentType: 'application/json',
-    headers: { Authorization: `Bearer ${LINE_ACCESS_TOKEN}` },
-    payload: JSON.stringify(payload), muteHttpExceptions: true
-  };
-  UrlFetchApp.fetch(url, options);
 }
