@@ -1,5 +1,5 @@
 /**
- * 模組 2：主程式進入點、Web App 與 LINE 狀態機 (2_Main.js)
+ * 模組 2：主程式進入點、Web App RPC 與 LINE 狀態機 (2_Main.js)
  */
 
 // ==================== 1. Webhook 與網頁應用程式進入點 ====================
@@ -48,9 +48,21 @@ function doPost(e) {
 }
 
 function doGet(e) {
-  return HtmlService.createTemplateFromFile('Index')
-    .evaluate()
-    .setTitle('覺風物資前置拍照建檔')
+  const template = HtmlService.createTemplateFromFile('Index');
+  const params = (e && e.parameter) ? e.parameter : {};
+  
+  template.mode = params.mode || 'inbound';
+  template.cell = params.cell || '';
+  template.uid = params.uid || '';
+  template.userName = params.name || '';
+  template.shelf = params.shelf || '';
+  template.box = params.box || '';
+  template.space = params.space || '';
+
+  const title = template.mode === 'stocktake' ? '覺風格位拍照批次盤點' : '覺風物資前置拍照建檔';
+
+  return template.evaluate()
+    .setTitle(title)
     .addMetaTag('viewport', 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
@@ -64,11 +76,128 @@ function getCategoryList() {
     return [];
   }
 }
-
 function getCategoriesForFrontend() {
   return getCategoryList();
 }
 
+/**
+ * 網頁【拍照盤點模式】專用：多物資識別與庫存主檔自動匹配
+ */
+function analyzeStocktakePhoto(base64Data, mimeType) {
+  try {
+    if (!CONFIG.GEMINI_API_KEY) {
+      throw new Error("未設定 GEMINI_API_KEY");
+    }
+
+    // 1. 調用 Gemini Vision 多物件辨識
+    const recognizedList = callGeminiMultiItemRecognition(base64Data, mimeType);
+
+    // 2. 對辨識出的每一個品項比對 SKU_MASTER
+    const results = recognizedList.map(item => {
+      const keyword = item.itemName || "";
+      const matched = keyword ? findSKU(keyword) : [];
+
+      const candidates = matched.map(m => ({
+        skuId: (m['品項編號'] || m['sku_id'] || '').toString(),
+        itemName: (m['物品名稱'] || m['品名'] || '').toString(),
+        author: (m['規格或作者'] || m['規格/作者'] || m['作者'] || '').toString(),
+        category: (m['大類名稱'] || m['大類'] || '').toString(),
+        barcode: (m['條碼編號'] || m['ISBN/條碼'] || '').toString()
+      }));
+
+      return {
+        rawName: keyword,
+        rawAuthor: item.author || "",
+        rawBarcode: item.barcode || "",
+        candidates: candidates
+      };
+    });
+
+    return { success: true, items: results };
+  } catch (err) {
+    writeDebugLog("analyzeStocktakePhoto 錯誤: " + err.message);
+    return { success: false, message: err.message, items: [] };
+  }
+}
+
+/**
+ * 調用 Gemini 辨識畫面中的「多件」物資/書籍
+ */
+function callGeminiMultiItemRecognition(base64Data, mimeType) {
+  const candidateModels = [
+    "gemini-flash-lite-latest",
+    "gemini-3.5-flash-lite",
+    "gemini-3.8-flash"
+  ];
+
+  const prompt = `你是一個專業的圖書與佛寺物資盤點助理。請觀察這張照片，辨識畫面中出現的所有書籍或物品：
+1. 找出畫面中所有清楚可見的書籍品名/書名（若有期數，如《覺風期刊 第82期》，請務必完整保留）。
+2. 若有標註作者、編著者，請擷取。
+3. 若有看見 ISBN 或條碼數字，請擷取。
+4. 請務必只回傳合法的 JSON 字串，格式限定為：
+{
+  "items": [
+    {"itemName": "完整書名或品名", "author": "作者姓名", "barcode": "ISBN或條碼數字"}
+  ]
+}
+若畫面中完全沒有物資，請回傳 {"items": []}。請不要輸出任何 Markdown 格式或額外說明文字。`;
+
+  const payload = {
+    contents: [{
+      parts: [
+        { text: prompt },
+        { inlineData: { mimeType: mimeType || "image/jpeg", data: base64Data } }
+      ]
+    }],
+    generationConfig: { responseMimeType: "application/json" }
+  };
+
+  const options = {
+    method: "post",
+    contentType: "application/json",
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true
+  };
+
+  for (const model of candidateModels) {
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
+    try {
+      const response = UrlFetchApp.fetch(endpoint, options);
+      const resCode = response.getResponseCode();
+      const resText = response.getContentText();
+
+      if (resCode === 200) {
+        const resJson = JSON.parse(resText);
+        if (resJson.candidates && resJson.candidates[0].content && resJson.candidates[0].content.parts[0].text) {
+          const parsed = JSON.parse(resJson.candidates[0].content.parts[0].text);
+          return parsed.items || [];
+        }
+      } else if (resCode === 503 || resCode === 429) {
+        Utilities.sleep(300);
+      }
+    } catch (err) {
+      writeDebugLog(`callGeminiMultiItemRecognition [${model}] 例外: ${err.message}`);
+    }
+  }
+
+  return [];
+}
+
+/**
+ * 網頁【拍照盤點模式】專用：一鍵批次寫入庫存與記錄
+ */
+function batchUpdateStock(cellCode, userId, items) {
+  try {
+    return executeBatchStockWorkflow(userId, cellCode, items);
+  } catch (err) {
+    writeDebugLog("batchUpdateStock 錯誤: " + err.message);
+    return { success: false, message: err.message };
+  }
+}
+
+/**
+ * 網頁【零庫存建檔模式】專用：單圖分析
+ */
 function uploadAndAnalyzeImage(base64Data, mimeType) {
   try {
     if (!CONFIG.INBOUND_IMG_FOLDER_ID) {
@@ -109,18 +238,12 @@ function callGeminiVisionRecognition(base64Data, mimeType) {
     return { itemName: "", author: "", barcode: "", category: "出版品與佛藝書籍" };
   }
 
-  const candidateModels = [
-    "gemini-flash-lite-latest",
-    "gemini-3.5-flash-lite",
-    "gemini-3.8-flash"
-  ];
-
+  const candidateModels = ["gemini-flash-lite-latest", "gemini-3.5-flash-lite", "gemini-3.8-flash"];
   const prompt = `你是一個專業的圖書與佛寺物資建檔助理。請仔細觀察這張照片：
 1. 辨識照片中的【完整書籍書名/物品品名】（例如《大智慧到彼岸》，若有副標題可一併保留）。
 2. 辨識書籍的【作者/著者/編譯者】姓名（例如「釋寬謙」、「印順導師」；若非書籍或未標明作者，請填空字串 ""）。
 3. 若有看到 ISBN 或商品條碼數字，請擷取出來；若無則填空字串 ""。
 4. 推論所屬物資大類（請對應：出版品與佛藝書籍、宗教與儀式物品、專業影音廣播、辦公與生活家電、消耗品與雜項）。
-
 請務必只回傳合法的 JSON 字串，格式嚴格限定為：
 {"itemName": "品名或書名", "author": "作者姓名", "barcode": "ISBN或條碼", "category": "大類名稱"}`;
 
@@ -145,53 +268,31 @@ function callGeminiVisionRecognition(base64Data, mimeType) {
     const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
     try {
       const response = UrlFetchApp.fetch(endpoint, options);
-      const resCode = response.getResponseCode();
-      const resText = response.getContentText();
-
-      if (resCode === 200) {
-        const resJson = JSON.parse(resText);
+      if (response.getResponseCode() === 200) {
+        const resJson = JSON.parse(response.getContentText());
         if (resJson.candidates && resJson.candidates[0].content && resJson.candidates[0].content.parts[0].text) {
           return JSON.parse(resJson.candidates[0].content.parts[0].text);
         }
-      } else if (resCode === 503 || resCode === 429) {
-        writeDebugLog(`[Gemini ${model}] 伺服器忙碌 (${resCode})，自動切換至備援模型...`);
-        Utilities.sleep(300);
-      } else {
-        writeDebugLog(`Gemini [${model}] API 回傳異常 [${resCode}]: ${resText}`);
       }
-    } catch (err) {
-      writeDebugLog(`Gemini [${model}] 呼叫例外: ${err.message}`);
-    }
+    } catch (err) {}
   }
-
   return { itemName: "", author: "", barcode: "", category: "出版品與佛藝書籍" };
 }
 
 function recognizeBarcodeOnly(base64Data, mimeType) {
-  if (!CONFIG.GEMINI_API_KEY) {
-    return { success: false, barcode: "" };
-  }
+  if (!CONFIG.GEMINI_API_KEY) return { success: false, barcode: "" };
 
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
-  const prompt = `你是一個專業條碼與 ISBN 辨識工具。請檢視這張照片：
-1. 找出影像中印出的 ISBN、EAN-13、或商品條碼純數字（長度通常為 10 碼或 13 碼，若有連字號請去除，僅保留純數字）。
-2. 只回傳標準 JSON 字串，格式為：{"barcode": "純數字條碼"}。若影像中完全看不出條碼則回傳 {"barcode": ""}`;
-
-  const payload = {
-    contents: [{
-      parts: [
-        { text: prompt },
-        { inlineData: { mimeType: mimeType || "image/jpeg", data: base64Data } }
-      ]
-    }],
-    generationConfig: { responseMimeType: "application/json" }
-  };
+  const prompt = `你是一個專業條碼與 ISBN 辨識工具。找出照片中印出的純數字條碼（去除連字號）。回傳標準 JSON：{"barcode": "純數字條碼"}`;
 
   try {
     const response = UrlFetchApp.fetch(endpoint, {
       method: "post",
       contentType: "application/json",
-      payload: JSON.stringify(payload),
+      payload: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType: mimeType || "image/jpeg", data: base64Data } }] }],
+        generationConfig: { responseMimeType: "application/json" }
+      }),
       muteHttpExceptions: true
     });
 
@@ -201,12 +302,8 @@ function recognizeBarcodeOnly(base64Data, mimeType) {
         const parsed = JSON.parse(resJson.candidates[0].content.parts[0].text);
         return { success: true, barcode: (parsed.barcode || "").replace(/[^0-9]/g, "") };
       }
-    } else {
-      writeDebugLog(`[recognizeBarcodeOnly] API 異常: ${response.getContentText()}`);
     }
-  } catch (err) {
-    writeDebugLog("[recognizeBarcodeOnly] 錯誤: " + err.message);
-  }
+  } catch (err) {}
 
   return { success: false, barcode: "" };
 }
@@ -349,11 +446,22 @@ const StateHandlers = {
       }
       return;
     }
+
     ctx.session.state = STATE.INPUT_SKU;
     ctx.session.cellCode = cellCode;
     ctx.session.shelfName = matchedShelf.name;
     SessionManager.save(ctx.lineUid, ctx.session);
-    replyFlexSearchPromptCard(ctx.replyToken, ctx.session.spaceName, ctx.session.boxName, matchedShelf.name, cellCode, false);
+
+    // 🌟 產生帶有當前格位參數的 Web App 盤點 URL
+    const webAppStocktakeUrl = `${CONFIG.WEB_APP_URL}?mode=stocktake` +
+      `&cell=${encodeURIComponent(cellCode)}` +
+      `&uid=${encodeURIComponent(ctx.userId)}` +
+      `&name=${encodeURIComponent(ctx.userName)}` +
+      `&shelf=${encodeURIComponent(matchedShelf.name)}` +
+      `&box=${encodeURIComponent(ctx.session.boxName || '')}` +
+      `&space=${encodeURIComponent(ctx.session.spaceName || '')}`;
+
+    replyFlexSearchPromptCard(ctx.replyToken, ctx.session.spaceName, ctx.session.boxName, matchedShelf.name, cellCode, false, webAppStocktakeUrl);
   },
 
   [STATE.INPUT_SKU]: function(ctx) {
@@ -477,7 +585,6 @@ function handleLineMessage(event) {
   const myDept = currentVolunteer['隸屬組織/部門'] || "基本志工";
   const myTitle = currentVolunteer['職稱/身份'] || "志工";
 
-  // 常見指令攔截
   if (userMessage === '綁定身份') {
     replyTextMessage(replyToken, `💡 溫馨提醒：\n${myName} 您好，您已完成志工身份認證！\n\n編號：[${myUserId}]\n單位：${myDept}\n職稱：${myTitle}\n\n您的權限已開通，請點選「📸 拍照入庫」或「📷 開始盤點」進行作業！🙏`);
     return;
@@ -511,19 +618,16 @@ function handleLineMessage(event) {
     return;
   }
 
-  // 返回指令處理
   if (userMessage.startsWith(UI.BTN_BACK_PREFIX)) {
     handleGoBack(replyToken, lineUid, cachedSession, myName);
     return;
   }
 
-  // 導航系統指令處理
   if (isSystemControlCommand(userMessage)) {
     handleSystemCommand(replyToken, lineUid, cachedSession, userMessage, myName);
     return;
   }
   
-  // 透過策略字典執行對應狀態邏輯
   const handler = StateHandlers[cachedSession.state];
   if (handler) {
     handler({

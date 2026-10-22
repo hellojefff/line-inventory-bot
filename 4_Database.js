@@ -1,19 +1,9 @@
 /**
  * 模組 4：資料庫與試算表操作層 (4_Database.js)
- * 核心亮點：
- * 1. withSpreadsheet 統一高階函式處理試算表開啟與 LockService 併發管理
- * 2. 欄位自動對齊解析器（容錯大類、作者、條碼欄位別名）
- * 3. 完整的階層據點檢索與雙重身分認證
  */
 
 // ==================== 1. 資料庫連線與安全鎖工具 ====================
 
-/**
- * 封裝 Google Sheets 讀寫與 LockService，自動釋放資源
- * @param {Function} action 執行回呼 (接收 ss: Spreadsheet 物件)
- * @param {boolean} requireLock 是否要求 ScriptLock 併發保護
- * @param {number} lockTimeout 鎖定逾時時間 (毫秒)
- */
 function withSpreadsheet(action, requireLock = false, lockTimeout = 10000) {
   let lock = null;
   try {
@@ -33,9 +23,6 @@ function withSpreadsheet(action, requireLock = false, lockTimeout = 10000) {
   }
 }
 
-/**
- * 取得工作表標題欄位索引字典 (去除空格、統一小寫比對)
- */
 function getSheetColumnIndexes(headers) {
   const map = {};
   headers.forEach((h, idx) => {
@@ -83,7 +70,6 @@ function appendSkuMasterRecord(data) {
   const categoryName = (data.category || "").trim();
   let categoryCode = (data.categoryCode || "").trim();
 
-  // 若未傳入大類代碼，自動由 CATEGORY_MASTER 清單或名稱推導
   if (!categoryCode) {
     const categories = getCategoryMasterList();
     const matched = categories.find(c => c.name === categoryName || categoryName.includes(c.name));
@@ -119,7 +105,6 @@ function appendSkuMasterRecord(data) {
       throw new Error("SKU_MASTER 缺少必要欄位 (品項編號 / 物品名稱)");
     }
 
-    // 1. 查重比對：品名完全相同者直接回傳，若已有資料但缺圖則補上
     const normalizedTarget = cleanName.replace(/\s+/g, "").toLowerCase();
     for (let i = 1; i < rows.length; i++) {
       const existingName = rows[i][itemNameIdx] ? rows[i][itemNameIdx].toString().replace(/\s+/g, "").toLowerCase() : "";
@@ -135,7 +120,6 @@ function appendSkuMasterRecord(data) {
       }
     }
 
-    // 2. 計算該大類最大流水號 (格式如：H0000001)
     let maxSerial = 0;
     const prefixRegex = new RegExp(`^${categoryCode}-?(\\d+)$`, 'i');
 
@@ -154,7 +138,6 @@ function appendSkuMasterRecord(data) {
     const newSkuId = `${categoryCode}${String(nextSerial).padStart(7, '0')}`;
     const timestamp = Utilities.formatDate(new Date(), "GMT+8", "yyyy-MM-dd HH:mm:ss");
 
-    // 3. 組裝寫入列
     const newRow = new Array(rows[0].length).fill("");
     newRow[skuIdIdx] = newSkuId;
     if (cateCodeIdx !== undefined) newRow[cateCodeIdx] = categoryCode;
@@ -199,63 +182,85 @@ function createPreStockSkuMasterWithCategory(itemName, categoryCode, categoryNam
   }
 }
 
-// ==================== 3. 庫存盤點與更正維護模組 ====================
+// ==================== 3. 庫存盤點與批次更新模組 ====================
 
-function executeUpdateStockWorkflow(userId, cellCode, skuId, itemName, qty) {
-  if (!validateStocktakeRelations(userId, skuId)) return false; 
-  
-  try {
-    return withSpreadsheet(ss => {
-      // 1. 寫入歷史日誌表 STOCKTAKE_LOG
-      let logSheet = ss.getSheetByName("STOCKTAKE_LOG");
-      if (!logSheet) {
-        logSheet = ss.insertSheet("STOCKTAKE_LOG");
-        logSheet.appendRow(["流水編號", "日期時間", "人員編號", "儲位格位代碼", "品項編號", "物品名稱", "實清數量"]);
-      }
-      const nextLogId = 'LOG-' + String(logSheet.getLastRow()).padStart(3, '0');
-      logSheet.appendRow([nextLogId, new Date(), userId, cellCode, skuId, itemName, qty]);
+/**
+ * 🌟 批次盤點更新核心（單一鎖定事務，支援一圖多本寫入）
+ */
+function executeBatchStockWorkflow(userId, cellCode, items) {
+  if (!items || items.length === 0) {
+    return { success: false, message: "無待更新項目" };
+  }
 
-      // 2. 更新當前庫存表 CURRENT_STOCK
-      let stockSheet = ss.getSheetByName("CURRENT_STOCK");
-      if (!stockSheet) {
-        stockSheet = ss.insertSheet("CURRENT_STOCK");
-        stockSheet.appendRow(["場域編碼", "儲位格位代碼", "品項編號", "物品名稱", "現有庫存量"]);
-      }
-      
-      const stockData = stockSheet.getDataRange().getValues();
-      const colMap = getSheetColumnIndexes(stockData[0]);
-      const cellIdx = colMap['儲位格位代碼'];
-      const skuIdx = colMap['品項編號'];
-      const qtyIdx = colMap['現有庫存量'];
-      let isRecordFound = false;
+  return withSpreadsheet(ss => {
+    // 1. 批次寫入日誌表 STOCKTAKE_LOG
+    let logSheet = ss.getSheetByName("STOCKTAKE_LOG");
+    if (!logSheet) {
+      logSheet = ss.insertSheet("STOCKTAKE_LOG");
+      logSheet.appendRow(["流水編號", "日期時間", "人員編號", "儲位格位代碼", "品項編號", "物品名稱", "實清數量"]);
+    }
+    const startRow = logSheet.getLastRow();
+    const timestamp = new Date();
+    const logRows = [];
 
+    items.forEach((item, idx) => {
+      const nextLogId = 'LOG-' + String(startRow + idx).padStart(3, '0');
+      logRows.push([nextLogId, timestamp, userId, cellCode, item.skuId, item.itemName, item.qty]);
+    });
+
+    if (logRows.length > 0) {
+      logSheet.getRange(startRow + 1, 1, logRows.length, logRows[0].length).setValues(logRows);
+    }
+
+    // 2. 批次更新庫存表 CURRENT_STOCK
+    let stockSheet = ss.getSheetByName("CURRENT_STOCK");
+    if (!stockSheet) {
+      stockSheet = ss.insertSheet("CURRENT_STOCK");
+      stockSheet.appendRow(["場域編碼", "儲位格位代碼", "品項編號", "物品名稱", "現有庫存量"]);
+    }
+
+    const stockData = stockSheet.getDataRange().getValues();
+    const colMap = getSheetColumnIndexes(stockData[0]);
+    const cellIdx = colMap['儲位格位代碼'];
+    const skuIdx = colMap['品項編號'];
+    const qtyIdx = colMap['現有庫存量'];
+    const parts = cellCode.split('-');
+    const targetLocId = parts.length >= 2 ? `${parts[0]}-${parts[1]}` : cellCode;
+
+    const toAppend = [];
+    items.forEach(item => {
+      let isFound = false;
       for (let i = 1; i < stockData.length; i++) {
-        if (stockData[i][cellIdx] === cellCode && stockData[i][skuIdx] === skuId) {
-          stockSheet.getRange(i + 1, qtyIdx + 1).setValue(qty);
-          isRecordFound = true;
+        if (stockData[i][cellIdx] === cellCode && stockData[i][skuIdx] === item.skuId) {
+          stockSheet.getRange(i + 1, qtyIdx + 1).setValue(item.qty);
+          stockData[i][qtyIdx] = item.qty;
+          isFound = true;
           break;
         }
       }
-
-      if (!isRecordFound) {
-        const parts = cellCode.split('-');
-        const targetLocId = parts.length >= 2 ? `${parts[0]}-${parts[1]}` : cellCode;
+      if (!isFound) {
         const newRow = new Array(stockData[0].length).fill("");
-        
         newRow[colMap['場域編碼']] = targetLocId;
         newRow[cellIdx] = cellCode;
-        newRow[skuIdx] = skuId;
-        newRow[colMap['物品名稱']] = itemName;
-        newRow[qtyIdx] = qty;
-        
-        stockSheet.appendRow(newRow);
+        newRow[skuIdx] = item.skuId;
+        newRow[colMap['物品名稱']] = item.itemName;
+        newRow[qtyIdx] = item.qty;
+        toAppend.push(newRow);
       }
-      return true;
-    }, true);
-  } catch (e) {
-    writeDebugLog("executeUpdateStockWorkflow 失敗: " + e.message);
-    return false;
-  }
+    });
+
+    if (toAppend.length > 0) {
+      stockSheet.getRange(stockSheet.getLastRow() + 1, 1, toAppend.length, toAppend[0].length).setValues(toAppend);
+    }
+
+    return { success: true, count: items.length };
+  }, true);
+}
+
+function executeUpdateStockWorkflow(userId, cellCode, skuId, itemName, qty) {
+  if (!validateStocktakeRelations(userId, skuId)) return false; 
+  const res = executeBatchStockWorkflow(userId, cellCode, [{ skuId: skuId, itemName: itemName, qty: qty }]);
+  return res.success;
 }
 
 function correctLastItemName(skuId, newItemName, cellCode) {
@@ -661,14 +666,19 @@ function findSKU(keyword) {
     const barcodeIdx = colMap['條碼編號'] !== undefined ? colMap['條碼編號'] : colMap['ISBN/條碼']; 
 
     const results = [];
-    const searchStr = keyword.toString().toLowerCase();
+    const searchStr = keyword.toString().toLowerCase().trim();
 
     for (let i = 1; i < data.length; i++) {
       const row = data[i];
-      if ((row[skuIdIdx] && row[skuIdIdx].toString().toLowerCase().includes(searchStr)) ||
-          (row[itemNameIdx] && row[itemNameIdx].toString().toLowerCase().includes(searchStr)) ||
-          (specAuthorIdx !== undefined && row[specAuthorIdx] && row[specAuthorIdx].toString().toLowerCase().includes(searchStr)) ||
-          (barcodeIdx !== undefined && row[barcodeIdx] && row[barcodeIdx].toString().toLowerCase() === searchStr)) {
+      const skuVal = row[skuIdIdx] ? row[skuIdIdx].toString().toLowerCase() : "";
+      const nameVal = row[itemNameIdx] ? row[itemNameIdx].toString().toLowerCase() : "";
+      const authorVal = (specAuthorIdx !== undefined && row[specAuthorIdx]) ? row[specAuthorIdx].toString().toLowerCase() : "";
+      const barcodeVal = (barcodeIdx !== undefined && row[barcodeIdx]) ? row[barcodeIdx].toString().toLowerCase() : "";
+
+      if (skuVal.includes(searchStr) ||
+          nameVal.includes(searchStr) ||
+          authorVal.includes(searchStr) ||
+          barcodeVal === searchStr) {
         const skuObj = {};
         data[0].forEach((header, index) => { skuObj[header] = row[index]; });
         results.push(skuObj);

@@ -6,9 +6,6 @@ function replyTextMessage(replyToken, text) {
   sendToLine({ replyToken: replyToken, messages: [{ type: 'text', text: text }] });
 }
 
-/**
- * 零庫存前置建檔導引卡片
- */
 function replyFlexInboundPromptCard(replyToken, userName) {
   const flexContents = {
     "type": "bubble",
@@ -113,8 +110,8 @@ function replyFlexManualCard(replyToken, userName) {
           "cornerRadius": "md",
           "paddingAll": "md",
           "contents": [
-            { "type": "text", "text": "第 2 步：搜尋物資名稱", "weight": "bold", "size": "md", "color": "#15803D" },
-            { "type": "text", "text": "在對話框直接打入【書名或用品名稱】進行即時比對。", "size": "sm", "color": "#4B5563", "margin": "xs", "wrap": true }
+            { "type": "text", "text": "第 2 步：拍照或搜尋物資", "weight": "bold", "size": "md", "color": "#15803D" },
+            { "type": "text", "text": "點擊綠色大按鈕直接拍照，一次拍多本並點擊數量完成！", "size": "sm", "color": "#4B5563", "margin": "xs", "wrap": true }
           ]
         },
         {
@@ -126,8 +123,8 @@ function replyFlexManualCard(replyToken, userName) {
           "cornerRadius": "md",
           "paddingAll": "md",
           "contents": [
-            { "type": "text", "text": "第 3 步：輸入實清數量", "weight": "bold", "size": "md", "color": "#15803D" },
-            { "type": "text", "text": "輸入眼前看到的實際數量，系統即刻更新庫存！", "size": "sm", "color": "#4B5563", "margin": "xs", "wrap": true }
+            { "type": "text", "text": "第 3 步：一鍵完成入庫", "weight": "bold", "size": "md", "color": "#15803D" },
+            { "type": "text", "text": "點擊送出即可自動寫入庫存，無需逐筆打字！", "size": "sm", "color": "#4B5563", "margin": "xs", "wrap": true }
           ]
         }
       ]
@@ -273,12 +270,65 @@ function replyFlexMenuCard(replyToken, title, subtitle, items, backBtnLabel = nu
   });
 }
 
-function replyFlexSearchPromptCard(replyToken, spaceName, boxName, shelfName, cellCode, isRetry = false) {
+/**
+ * 🌟 進入格位引導卡片（頂部新增大按鈕直接開啟瀏覽器相機拍照盤點）
+ */
+function replyFlexSearchPromptCard(replyToken, spaceName, boxName, shelfName, cellCode, isRetry = false, webAppStocktakeUrl = null) {
   const currentBoxLabel = boxName || "同櫃子";
   const cleanBoxName = currentBoxLabel.includes('-') ? currentBoxLabel.split('-')[1].split('(')[0] : (currentBoxLabel.split('(')[0] || "同櫃");
   const headerTitle = isRetry ? "🔍 重新搜尋物資" : "📍 已定位盤點格位";
-  const promptText = isRetry ? "🔍 請在下方對話框輸入新的【物品名稱】或關鍵字：" : "🔍 請在下方對話框輸入【物品名稱】進行比對：";
-  
+
+  const bodyContents = [
+    {
+      "type": "box",
+      "layout": "vertical",
+      "backgroundColor": "#F9FAFB",
+      "borderColor": "#16A34A",
+      "borderWidth": "1px",
+      "cornerRadius": "md",
+      "paddingAll": "md",
+      "contents": [
+        { "type": "text", "text": `🏢 ${spaceName} ｜ ${boxName}`, "size": "sm", "color": "#4B5563", "wrap": true },
+        { "type": "text", "text": `📍 ${shelfName}`, "weight": "bold", "size": "lg", "color": "#15803D", "margin": "xs", "wrap": true },
+        { "type": "text", "text": `格位代碼：${cellCode}`, "size": "xs", "color": "#9CA3AF", "margin": "sm" }
+      ]
+    }
+  ];
+
+  // 🌟 若有傳入 Web App 網址，放置最顯眼的拍照大按鈕
+  if (webAppStocktakeUrl) {
+    bodyContents.push({
+      "type": "button",
+      "style": "primary",
+      "color": "#16A34A",
+      "height": "md",
+      "margin": "lg",
+      "action": {
+        "type": "uri",
+        "label": "📸 拍照盤點 (支援一圖多本)",
+        "uri": webAppStocktakeUrl
+      }
+    });
+    bodyContents.push({
+      "type": "text",
+      "text": "✨ 點擊拍照自動辨識物資，免手動打字！",
+      "size": "xxs",
+      "color": "#047857",
+      "align": "center",
+      "margin": "xs"
+    });
+    bodyContents.push({ "type": "separator", "margin": "md" });
+  }
+
+  bodyContents.push({
+    "type": "text",
+    "text": isRetry ? "🔍 或在下方對話框輸入【物品名稱】打字搜尋：" : "🔍 或直接在下方對話框打字搜尋物資：",
+    "size": "xs",
+    "color": "#6B7280",
+    "margin": "md",
+    "wrap": true
+  });
+
   const flexContents = {
     "type": "bubble",
     "header": {
@@ -287,37 +337,13 @@ function replyFlexSearchPromptCard(replyToken, spaceName, boxName, shelfName, ce
       "backgroundColor": "#F0FDF4",
       "contents": [
         { "type": "text", "text": headerTitle, "weight": "bold", "size": "xl", "color": "#15803D" },
-        { "type": "text", "text": "請在對話框直接打字搜尋", "size": "xs", "color": "#4B5563", "margin": "xs" }
+        { "type": "text", "text": "請選擇拍照盤點或打字比對", "size": "xs", "color": "#4B5563", "margin": "xs" }
       ]
     },
     "body": {
       "type": "box",
       "layout": "vertical",
-      "contents": [
-        {
-          "type": "box",
-          "layout": "vertical",
-          "backgroundColor": "#F9FAFB",
-          "borderColor": "#16A34A",
-          "borderWidth": "1px",
-          "cornerRadius": "md",
-          "paddingAll": "md",
-          "contents": [
-            { "type": "text", "text": `🏢 ${spaceName} ｜ ${boxName}`, "size": "sm", "color": "#4B5563", "wrap": true },
-            { "type": "text", "text": `📍 ${shelfName}`, "weight": "bold", "size": "lg", "color": "#15803D", "margin": "xs", "wrap": true },
-            { "type": "text", "text": `格位代碼：${cellCode}`, "size": "xs", "color": "#9CA3AF", "margin": "sm" }
-          ]
-        },
-        {
-          "type": "text",
-          "text": promptText,
-          "size": "sm",
-          "weight": "bold",
-          "color": "#374151",
-          "margin": "lg",
-          "wrap": true
-        }
-      ]
+      "contents": bodyContents
     },
     "footer": {
       "type": "box",
@@ -680,91 +706,44 @@ function replyCorrectionSuccessWithMonk(replyToken, userName, fullChineseLocatio
   });
 }
 
-/**
- * 🌟 搜尋多筆物資直列清單：精準支援「規格或作者」、ISBN 與點擊縮圖看大圖
- */
 function replyFlexSkuVerticalList(replyToken, skus) {
   const skuRows = skus.map(s => {
     const skuId = (s['品項編號'] || s['sku_id'] || s['SKU_ID'] || "未知").toString().trim();
     const itemName = (s['物品名稱'] || s['品名'] || s['name'] || "未知名稱").toString().trim();
     const cateName = (s['大類名稱'] || s['大類'] || s['category'] || "一般物資").toString().trim();
-    
-    // 🌟 關鍵修正：優先讀取試算表中的「規格或作者」
     const author = (s['規格或作者'] || s['規格/作者'] || s['作者'] || s['規格'] || s['author'] || "").toString().trim();
     const barcode = (s['條碼編號'] || s['ISBN/條碼'] || s['barcode'] || "").toString().trim();
     let rawImgUrl = (s['封面圖片URL'] || s['圖片網址'] || s['imageUrl'] || "").toString().trim();
 
-    // 轉換為 Google CDN 格式
     let thumbUrl = rawImgUrl;
     let fullImgUrl = rawImgUrl;
     if (rawImgUrl.includes("drive.google.com")) {
       const match = rawImgUrl.match(/id=([a-zA-Z0-9_-]+)/) || rawImgUrl.match(/\/d\/([a-zA-Z0-9_-]+)/);
       if (match && match[1]) {
-        thumbUrl = `https://lh3.googleusercontent.com/d/${match[1]}=w240`;    // 縮圖
-        fullImgUrl = `https://lh3.googleusercontent.com/d/${match[1]}=w1200`; // 高清原圖
+        thumbUrl = `https://lh3.googleusercontent.com/d/${match[1]}=w240`;
+        fullImgUrl = `https://lh3.googleusercontent.com/d/${match[1]}=w1200`;
       }
     }
 
-    // 1. 組裝文字資訊
     const infoContents = [
-      {
-        "type": "text",
-        "text": `📁 ${cateName}`,
-        "weight": "bold",
-        "size": "xs",
-        "color": "#6B7280"
-      },
-      {
-        "type": "text",
-        "text": itemName,
-        "weight": "bold",
-        "size": "md",
-        "color": "#111827",
-        "wrap": true,
-        "margin": "xs"
-      }
+      { "type": "text", "text": `📁 ${cateName}`, "weight": "bold", "size": "xs", "color": "#6B7280" },
+      { "type": "text", "text": itemName, "weight": "bold", "size": "md", "color": "#111827", "wrap": true, "margin": "xs" }
     ];
 
-    // 🌟 條件渲染：作者資訊（有資料即顯示）
     if (author) {
-      infoContents.push({
-        "type": "text",
-        "text": `✍️ 作者: ${author}`,
-        "size": "xs",
-        "color": "#4B5563",
-        "wrap": true,
-        "margin": "xs"
-      });
+      infoContents.push({ "type": "text", "text": `✍️ 作者: ${author}`, "size": "xs", "color": "#4B5563", "wrap": true, "margin": "xs" });
     }
+    infoContents.push({ "type": "text", "text": `編號: ${skuId}`, "size": "xs", "color": "#9CA3AF", "margin": "xs" });
 
-    // 品項編號
-    infoContents.push({
-      "type": "text",
-      "text": `編號: ${skuId}`,
-      "size": "xs",
-      "color": "#9CA3AF",
-      "margin": "xs"
-    });
-
-    // 條碼 / ISBN
     if (barcode) {
       infoContents.push({
         "type": "box",
         "layout": "baseline",
         "margin": "xs",
-        "contents": [
-          {
-            "type": "text",
-            "text": `🏷️ ISBN: ${barcode}`,
-            "size": "xxs",
-            "color": "#0284C7",
-            "wrap": true
-          }
-        ]
+        "contents": [{ "type": "text", "text": `🏷️ ISBN: ${barcode}`, "size": "xxs", "color": "#0284C7", "wrap": true }]
       });
     }
 
-    // 2. 封面縮圖（點擊開啟大圖）
     let topSection;
     if (thumbUrl && (thumbUrl.startsWith("http://") || thumbUrl.startsWith("https://"))) {
       topSection = {
@@ -777,35 +756,14 @@ function replyFlexSkuVerticalList(replyToken, skus) {
             "layout": "vertical",
             "cornerRadius": "md",
             "flex": 0,
-            "action": {
-              "type": "uri",
-              "label": "查看大圖",
-              "uri": fullImgUrl
-            },
-            "contents": [
-              {
-                "type": "image",
-                "url": thumbUrl,
-                "size": "72px",
-                "aspectRatio": "3:4",
-                "aspectMode": "cover"
-              }
-            ]
+            "action": { "type": "uri", "label": "查看大圖", "uri": fullImgUrl },
+            "contents": [{ "type": "image", "url": thumbUrl, "size": "72px", "aspectRatio": "3:4", "aspectMode": "cover" }]
           },
-          {
-            "type": "box",
-            "layout": "vertical",
-            "flex": 1,
-            "contents": infoContents
-          }
+          { "type": "box", "layout": "vertical", "flex": 1, "contents": infoContents }
         ]
       };
     } else {
-      topSection = {
-        "type": "box",
-        "layout": "vertical",
-        "contents": infoContents
-      };
+      topSection = { "type": "box", "layout": "vertical", "contents": infoContents };
     }
 
     return {
@@ -825,11 +783,7 @@ function replyFlexSkuVerticalList(replyToken, skus) {
           "color": "#16A34A",
           "height": "sm",
           "margin": "md",
-          "action": {
-            "type": "message",
-            "label": "👉 盤點此件",
-            "text": skuId
-          }
+          "action": { "type": "message", "label": "👉 盤點此件", "text": skuId }
         }
       ]
     };
@@ -846,11 +800,7 @@ function replyFlexSkuVerticalList(replyToken, skus) {
         { "type": "text", "text": "點擊左圖可放大封面，確認後點擊盤點：", "size": "sm", "color": "#4B5563", "margin": "xs" }
       ]
     },
-    "body": {
-      "type": "box",
-      "layout": "vertical",
-      "contents": skuRows
-    },
+    "body": { "type": "box", "layout": "vertical", "contents": skuRows },
     "footer": {
       "type": "box",
       "layout": "vertical",
@@ -860,22 +810,14 @@ function replyFlexSkuVerticalList(replyToken, skus) {
           "style": "secondary",
           "height": "md",
           "margin": "xs",
-          "action": {
-            "type": "message",
-            "label": "🔍 重新搜尋關鍵字",
-            "text": CMD_RETRY_SEARCH_SKU
-          }
+          "action": { "type": "message", "label": "🔍 重新搜尋關鍵字", "text": CMD_RETRY_SEARCH_SKU }
         },
         {
           "type": "button",
           "style": "secondary",
           "height": "md",
           "margin": "xs",
-          "action": {
-            "type": "message",
-            "label": "🚪 結束盤點 (回主選單)",
-            "text": CMD_EXIT_STOCKTAKE
-          }
+          "action": { "type": "message", "label": "🚪 結束盤點 (回主選單)", "text": CMD_EXIT_STOCKTAKE }
         }
       ]
     }
@@ -883,23 +825,14 @@ function replyFlexSkuVerticalList(replyToken, skus) {
 
   sendToLine({
     replyToken: replyToken,
-    messages: [{
-      "type": "flex",
-      "altText": "📦 找到多筆物資資料",
-      "contents": flexContents
-    }]
+    messages: [{ "type": "flex", "altText": "📦 找到多筆物資資料", "contents": flexContents }]
   });
 }
 
-
-/**
- * 🌟 搜尋單筆命中：彈出帶有封面大圖、作者、ISBN 與數量輸入指引的確認卡片
- */
 function replyFlexConfirmSingleSkuCard(replyToken, targetSku, userName) {
   const skuId = (targetSku['品項編號'] || targetSku['sku_id'] || targetSku['SKU_ID'] || "未知").toString().trim();
   const itemName = (targetSku['物品名稱'] || targetSku['品名'] || targetSku['name'] || "未知名稱").toString().trim();
   const cateName = (targetSku['大類名稱'] || targetSku['大類'] || targetSku['category'] || "一般物資").toString().trim();
-  // 🌟 關鍵修正：優先讀取「規格或作者」
   const author = (targetSku['規格或作者'] || targetSku['規格/作者'] || targetSku['作者'] || targetSku['規格'] || targetSku['author'] || "").toString().trim();
   const barcode = (targetSku['條碼編號'] || targetSku['ISBN/條碼'] || targetSku['barcode'] || "").toString().trim();
   let rawImgUrl = (targetSku['封面圖片URL'] || targetSku['圖片網址'] || targetSku['imageUrl'] || "").toString().trim();
@@ -907,9 +840,7 @@ function replyFlexConfirmSingleSkuCard(replyToken, targetSku, userName) {
   let fullImgUrl = rawImgUrl;
   if (rawImgUrl.includes("drive.google.com")) {
     const match = rawImgUrl.match(/id=([a-zA-Z0-9_-]+)/) || rawImgUrl.match(/\/d\/([a-zA-Z0-9_-]+)/);
-    if (match && match[1]) {
-      fullImgUrl = `https://lh3.googleusercontent.com/d/${match[1]}=w1000`;
-    }
+    if (match && match[1]) fullImgUrl = `https://lh3.googleusercontent.com/d/${match[1]}=w1000`;
   }
 
   let heroSection = undefined;
@@ -920,66 +851,27 @@ function replyFlexConfirmSingleSkuCard(replyToken, targetSku, userName) {
       "size": "full",
       "aspectRatio": "3:4",
       "aspectMode": "cover",
-      "action": {
-        "type": "uri",
-        "label": "查看封面大圖",
-        "uri": fullImgUrl
-      }
+      "action": { "type": "uri", "label": "查看封面大圖", "uri": fullImgUrl }
     };
   }
 
   const bodyContents = [
-    {
-      "type": "text",
-      "text": `📁 ${cateName}`,
-      "weight": "bold",
-      "size": "xs",
-      "color": "#6B7280"
-    },
-    {
-      "type": "text",
-      "text": itemName,
-      "weight": "bold",
-      "size": "xl",
-      "color": "#111827",
-      "wrap": true,
-      "margin": "xs"
-    }
+    { "type": "text", "text": `📁 ${cateName}`, "weight": "bold", "size": "xs", "color": "#6B7280" },
+    { "type": "text", "text": itemName, "weight": "bold", "size": "xl", "color": "#111827", "wrap": true, "margin": "xs" }
   ];
 
   if (author) {
-    bodyContents.push({
-      "type": "text",
-      "text": `✍️ 作者: ${author}`,
-      "size": "sm",
-      "color": "#4B5563",
-      "wrap": true,
-      "margin": "xs"
-    });
+    bodyContents.push({ "type": "text", "text": `✍️ 作者: ${author}`, "size": "sm", "color": "#4B5563", "wrap": true, "margin": "xs" });
   }
 
-  bodyContents.push({
-    "type": "text",
-    "text": `編號: ${skuId}`,
-    "size": "xs",
-    "color": "#9CA3AF",
-    "margin": "xs"
-  });
+  bodyContents.push({ "type": "text", "text": `編號: ${skuId}`, "size": "xs", "color": "#9CA3AF", "margin": "xs" });
 
   if (barcode) {
     bodyContents.push({
       "type": "box",
       "layout": "baseline",
       "margin": "xs",
-      "contents": [
-        {
-          "type": "text",
-          "text": `🏷️ ISBN: ${barcode}`,
-          "size": "xs",
-          "color": "#0284C7",
-          "wrap": true
-        }
-      ]
+      "contents": [{ "type": "text", "text": `🏷️ ISBN: ${barcode}`, "size": "xs", "color": "#0284C7", "wrap": true }]
     });
   }
 
@@ -994,21 +886,23 @@ function replyFlexConfirmSingleSkuCard(replyToken, targetSku, userName) {
     "paddingAll": "md",
     "margin": "md",
     "contents": [
-      {
-        "type": "text",
-        "text": "🔢 請在下方輸入【實清數量】：",
-        "weight": "bold",
-        "size": "sm",
-        "color": "#92400E"
-      },
-      {
-        "type": "text",
-        "text": "請直接回覆眼前看到的數字（例如：5 或 10）",
-        "size": "xs",
-        "color": "#B45309",
-        "margin": "xs"
-      }
+      { "type": "text", "text": "🔢 請在下方輸入【實清數量】：", "weight": "bold", "size": "sm", "color": "#92400E" },
+      { "type": "text", "text": "請直接回覆眼前看到的數字（例如：5 或 10）", "size": "xs", "color": "#B45309", "margin": "xs" }
     ]
+  });
+
+  // 🌟 常用數量快捷按鈕
+  bodyContents.push({
+    "type": "box",
+    "layout": "horizontal",
+    "spacing": "xs",
+    "margin": "sm",
+    "contents": [1, 2, 3, 5, 10].map(n => ({
+      "type": "button",
+      "style": "secondary",
+      "height": "sm",
+      "action": { "type": "message", "label": `${n}`, "text": `${n}` }
+    }))
   });
 
   const bubble = {
@@ -1022,11 +916,7 @@ function replyFlexConfirmSingleSkuCard(replyToken, targetSku, userName) {
         { "type": "text", "text": `${userName} 您好，請核對物資並填寫數量：`, "size": "sm", "color": "#047857", "margin": "xs" }
       ]
     },
-    "body": {
-      "type": "box",
-      "layout": "vertical",
-      "contents": bodyContents
-    },
+    "body": { "type": "box", "layout": "vertical", "contents": bodyContents },
     "footer": {
       "type": "box",
       "layout": "vertical",
@@ -1036,45 +926,26 @@ function replyFlexConfirmSingleSkuCard(replyToken, targetSku, userName) {
           "type": "button",
           "style": "secondary",
           "height": "sm",
-          "action": {
-            "type": "message",
-            "label": "🔍 物品不對？重新搜尋",
-            "text": CMD_RETRY_SEARCH_SKU
-          }
+          "action": { "type": "message", "label": "🔍 物品不對？重新搜尋", "text": CMD_RETRY_SEARCH_SKU }
         },
         {
           "type": "button",
           "style": "secondary",
           "height": "sm",
-          "action": {
-            "type": "message",
-            "label": "🚪 結束盤點",
-            "text": CMD_EXIT_STOCKTAKE
-          }
+          "action": { "type": "message", "label": "🚪 結束盤點", "text": CMD_EXIT_STOCKTAKE }
         }
       ]
     }
   };
 
-  if (heroSection) {
-    bubble.hero = heroSection;
-  }
+  if (heroSection) bubble.hero = heroSection;
 
   sendToLine({
     replyToken: replyToken,
-    messages: [{
-      "type": "flex",
-      "altText": `🎯 已鎖定物品：${itemName}`,
-      "contents": bubble
-    }]
+    messages: [{ "type": "flex", "altText": `🎯 已鎖定物品：${itemName}`, "contents": bubble }]
   });
 }
 
-
-
-/**
- * 唯一的發送至 LINE 函式（具備詳細錯誤排查日誌）
- */
 function sendToLine(payload) {
   const url = 'https://api.line.me/v2/bot/message/reply';
   const options = {
@@ -1086,9 +957,8 @@ function sendToLine(payload) {
   };
   try {
     const res = UrlFetchApp.fetch(url, options);
-    const code = res.getResponseCode();
-    if (code !== 200) {
-      writeDebugLog(`[LINE API 錯誤 ${code}]: ${res.getContentText()}`);
+    if (res.getResponseCode() !== 200) {
+      writeDebugLog(`[LINE API 錯誤 ${res.getResponseCode()}]: ${res.getContentText()}`);
     }
   } catch (err) {
     writeDebugLog(`[LINE fetch 例外]: ${err.message}`);
