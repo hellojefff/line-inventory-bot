@@ -4,7 +4,7 @@
  */
 
 // ==================== 1. 環境變數讀取與核心配置 ====================
-const scriptProperties = PropertiesService.getScriptProperties();
+//const scriptProperties = PropertiesService.getScriptProperties();
 
 const CONFIG = {
   SPREADSHEET_ID: scriptProperties.getProperty('SPREADSHEET_ID') || '13J32Ewv0PVL8o6hEoJUCuK2Ur5pBEnHO90tdG7XxtC8',
