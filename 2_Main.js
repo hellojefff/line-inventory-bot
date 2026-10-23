@@ -81,7 +81,7 @@ function getCategoriesForFrontend() {
 }
 
 /**
- * 🌟 網頁【零庫存建檔模式】：接收「封面 + 版權頁」雙照片，並調用 Gemini 跨圖比對
+ * 網頁【零庫存建檔模式】：接收「封面 + 版權頁」雙照片，並調用 Gemini 跨圖比對
  */
 function uploadAndAnalyzeDualImages(coverBase64, innerBase64, mimeType) {
   try {
@@ -92,7 +92,6 @@ function uploadAndAnalyzeDualImages(coverBase64, innerBase64, mimeType) {
     const folder = DriveApp.getFolderById(CONFIG.INBOUND_IMG_FOLDER_ID);
     const timestampStr = Utilities.formatDate(new Date(), "GMT+8", "yyyyMMdd_HHmmss");
 
-    // 1. 儲存封面圖片
     let coverUrl = "";
     if (coverBase64) {
       const coverBlob = Utilities.newBlob(Utilities.base64Decode(coverBase64), mimeType || "image/jpeg", `COVER_${timestampStr}.jpg`);
@@ -100,7 +99,6 @@ function uploadAndAnalyzeDualImages(coverBase64, innerBase64, mimeType) {
       coverUrl = `https://drive.google.com/uc?id=${coverFile.getId()}`;
     }
 
-    // 2. 儲存內頁/版權頁圖片
     let innerUrl = "";
     if (innerBase64) {
       const innerBlob = Utilities.newBlob(Utilities.base64Decode(innerBase64), mimeType || "image/jpeg", `CIP_${timestampStr}.jpg`);
@@ -108,7 +106,6 @@ function uploadAndAnalyzeDualImages(coverBase64, innerBase64, mimeType) {
       innerUrl = `https://drive.google.com/uc?id=${innerFile.getId()}`;
     }
 
-    // 3. 調用 Gemini Vision 雙圖分析
     let aiResult = { itemName: "", author: "", barcode: "", category: "出版品與佛藝書籍" };
     try {
       aiResult = callGeminiDualImageRecognition(coverBase64, innerBase64, mimeType);
@@ -118,8 +115,8 @@ function uploadAndAnalyzeDualImages(coverBase64, innerBase64, mimeType) {
 
     return {
       success: true,
-      imageUrl: coverUrl,       // 實體封面 (供後續盤點展示)
-      innerImageUrl: innerUrl, // 內頁/版權頁存檔
+      imageUrl: coverUrl,
+      innerImageUrl: innerUrl,
       recognizedName: aiResult.itemName || "",
       author: aiResult.author || "",
       barcode: aiResult.barcode || "",
@@ -131,9 +128,6 @@ function uploadAndAnalyzeDualImages(coverBase64, innerBase64, mimeType) {
   }
 }
 
-/**
- * 🌟 調用 Gemini Vision 同時分析「封面 + 內頁 CIP」
- */
 function callGeminiDualImageRecognition(coverBase64, innerBase64, mimeType) {
   if (!CONFIG.GEMINI_API_KEY) {
     return { itemName: "", author: "", barcode: "", category: "出版品與佛藝書籍" };
@@ -146,9 +140,9 @@ ${coverBase64 ? '- 第一張影像：書籍【封面】（有題名設計、視�
 ${innerBase64 ? '- 第二張影像：書籍【版權頁 / 內頁 CIP 國家圖書館預行編目資料】（具有最標準權威的正題名、著譯者與 ISBN 編號）。' : ''}
 
 【提取準則】：
-1. 【物品名稱/書名】：優先以【版權頁/CIP】所標記的正式出版品書名為準（例如CIP寫《唯識史觀及其哲學》，請精準提取正題名；若有副標題或卷號可適當組合）。
-2. 【作者/著者】：優先以版權頁/CIP所載之著者、譯者或註述者姓名為主（例如「法紡法師」、「釋寬謙」）。
-3. 【ISBN或條碼】：請從版權頁的 ISBN 欄位（例如 957-665-093-3）提取純數字條碼（去除連字號與括號說明）。若有多個 ISBN（如精裝/平裝），請優先提取與現書相符或平裝的純數字。
+1. 【物品名稱/書名】：優先以【版權頁/CIP】所標記的正式出版品書名為準。
+2. 【作者/著者】：優先以版權頁/CIP所載之著者、譯者或註述者姓名為主。
+3. 【ISBN或條碼】：請從版權頁的 ISBN 欄位提取純數字條碼（去除連字號）。
 4. 【大類名稱】：推論所屬大類（出版品與佛藝書籍、宗教與儀式物品、專業影音廣播、辦公與生活家電、消耗品與雜項）。
 
 請務必只回傳標準 JSON 字串：
@@ -156,17 +150,8 @@ ${innerBase64 ? '- 第二張影像：書籍【版權頁 / 內頁 CIP 國家圖�
 
   const parts = [{ text: prompt }];
 
-  if (coverBase64) {
-    parts.push({
-      inlineData: { mimeType: mimeType || "image/jpeg", data: coverBase64 }
-    });
-  }
-
-  if (innerBase64) {
-    parts.push({
-      inlineData: { mimeType: mimeType || "image/jpeg", data: innerBase64 }
-    });
-  }
+  if (coverBase64) parts.push({ inlineData: { mimeType: mimeType || "image/jpeg", data: coverBase64 } });
+  if (innerBase64) parts.push({ inlineData: { mimeType: mimeType || "image/jpeg", data: innerBase64 } });
 
   const payload = {
     contents: [{ parts: parts }],
@@ -200,15 +185,12 @@ ${innerBase64 ? '- 第二張影像：書籍【版權頁 / 內頁 CIP 國家圖�
   return { itemName: "", author: "", barcode: "", category: "出版品與佛藝書籍" };
 }
 
-/**
- * 相容舊呼叫封裝
- */
 function uploadAndAnalyzeImage(base64Data, mimeType) {
   return uploadAndAnalyzeDualImages(base64Data, null, mimeType);
 }
 
 /**
- * 網頁【拍照盤點模式】專用：多物資識別與庫存主檔自動匹配
+ * 🌟 網頁【拍照盤點模式】：多物資識別與庫存主檔自動匹配（支援帶出封面圖片）
  */
 function analyzeStocktakePhoto(base64Data, mimeType) {
   try {
@@ -222,13 +204,26 @@ function analyzeStocktakePhoto(base64Data, mimeType) {
       const keyword = item.itemName || "";
       const matched = keyword ? findSKU(keyword) : [];
 
-      const candidates = matched.map(m => ({
-        skuId: (m['品項編號'] || m['sku_id'] || '').toString(),
-        itemName: (m['物品名稱'] || m['品名'] || '').toString(),
-        author: (m['規格或作者'] || m['規格/作者'] || m['作者'] || '').toString(),
-        category: (m['大類名稱'] || m['大類'] || '').toString(),
-        barcode: (m['條碼編號'] || m['ISBN/條碼'] || '').toString()
-      }));
+      const candidates = matched.map(m => {
+        // 優先讀取封面，若無封面則回退顯示內頁/版權頁
+        const rawImg = (m['封面圖片URL'] || m['圖片網址'] || m['內頁圖片URL'] || m['版權頁圖片URL'] || '').toString().trim();
+        let thumbUrl = rawImg;
+        if (rawImg.includes("drive.google.com")) {
+          const match = rawImg.match(/id=([a-zA-Z0-9_-]+)/) || rawImg.match(/\/d\/([a-zA-Z0-9_-]+)/);
+          if (match && match[1]) {
+            thumbUrl = `https://lh3.googleusercontent.com/d/${match[1]}=w200`;
+          }
+        }
+
+        return {
+          skuId: (m['品項編號'] || m['sku_id'] || '').toString(),
+          itemName: (m['物品名稱'] || m['品名'] || '').toString(),
+          author: (m['規格或作者'] || m['規格/作者'] || m['作者'] || '').toString(),
+          category: (m['大類名稱'] || m['大類'] || '').toString(),
+          barcode: (m['條碼編號'] || m['ISBN/條碼'] || '').toString(),
+          imageUrl: thumbUrl // 🌟 帶出封面縮圖網址
+        };
+      });
 
       return {
         rawName: keyword,
@@ -427,7 +422,7 @@ const StateHandlers = {
     ctx.session.boxName = selectedBoxStr;
     SessionManager.save(ctx.lineUid, ctx.session);
     const shelfItems = shelves.map(s => ({ title: `📍 ${s.name}`, desc: `格位：${s.short_code}`, value: s.cell_code }));
-    replyFlexMenuCard(ctx.replyToken, "🚪 選擇盤點層格", `已對齊櫃體：【${selectedBoxStr}】\n請點選具體【層格】：`, shelfItems, `↩️ 返回 [${ctx.session.zoneName || "櫃位分區"}]`);
+    replyFlexMenuCard(ctx.replyToken, "🚪 選擇盤點層格", `已對齊櫃體：【${selectedBoxStr}】\n請點選具體【層格】：`, shelfItems, `↩️ 返回 [${session.zoneName || "櫃位分區"}]`);
   },
 
   [STATE.CHOOSE_CELL]: function(ctx) {
@@ -449,7 +444,6 @@ const StateHandlers = {
     ctx.session.shelfName = matchedShelf.name;
     SessionManager.save(ctx.lineUid, ctx.session);
 
-    // 產生帶有當前格位參數的 Web App 盤點 URL
     const webAppStocktakeUrl = `${CONFIG.WEB_APP_URL}?mode=stocktake` +
       `&cell=${encodeURIComponent(cellCode)}` +
       `&uid=${encodeURIComponent(ctx.userId)}` +
@@ -537,7 +531,7 @@ const StateHandlers = {
     SessionManager.save(ctx.lineUid, ctx.session, 1800);
 
     const locTextQty = `${ctx.session.siteName || ""} ${ctx.session.floorName || ""} ${ctx.session.spaceName || ""} - ${ctx.session.boxName || ""} (${ctx.session.shelfName || ""})`;
-    replyCorrectionSuccessWithMonk(ctx.replyToken, ctx.userName, locTextQty, ctx.session.cellCode, ctx.session.lastItemName, newCorrectQty, ctx.session.boxName, `實清數量已更正為【${newCorrectQty} 本/套】！`);
+    replyCorrectionSuccessWithMonk(ctx.replyToken, ctx.userName, locTextQty, ctx.session.cellCode, newCorrectQty, ctx.session.boxName, `實清數量已更正為【${newCorrectQty} 本/套】！`);
   },
 
   [STATE.POST_STOCKTAKE]: function(ctx) {

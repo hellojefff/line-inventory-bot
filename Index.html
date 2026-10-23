@@ -61,7 +61,6 @@
       line-height: 1.4;
     }
 
-    /* 雙拍照槽樣式 */
     .dual-photo-grid {
       display: flex;
       gap: 10px;
@@ -81,20 +80,9 @@
       border-color: #16a34a;
       background: #f0fdf4;
     }
-    .photo-slot-icon {
-      font-size: 1.8rem;
-      margin-bottom: 4px;
-    }
-    .photo-slot-title {
-      font-size: 0.85rem;
-      font-weight: bold;
-      color: #0f172a;
-    }
-    .photo-slot-sub {
-      font-size: 0.72rem;
-      color: #64748b;
-      margin-top: 2px;
-    }
+    .photo-slot-icon { font-size: 1.8rem; margin-bottom: 4px; }
+    .photo-slot-title { font-size: 0.85rem; font-weight: bold; color: #0f172a; }
+    .photo-slot-sub { font-size: 0.72rem; color: #64748b; margin-top: 2px; }
     .slot-preview {
       width: 100%;
       height: 110px;
@@ -104,7 +92,6 @@
       display: none;
     }
 
-    /* 盤點相機啟動按鈕 */
     .camera-trigger {
       display: block;
       width: 100%;
@@ -159,26 +146,39 @@
     .item-header {
       display: flex;
       align-items: flex-start;
-      gap: 8px;
+      gap: 10px;
       margin-bottom: 6px;
     }
     .item-header input[type="checkbox"] {
-      width: 20px;
-      height: 20px;
-      margin-top: 2px;
+      width: 22px;
+      height: 22px;
+      margin-top: 4px;
       accent-color: #16a34a;
     }
+
+    /* 🌟 盤點卡片內的封面縮圖樣式 */
+    .item-thumb {
+      width: 52px;
+      height: 72px;
+      object-fit: cover;
+      border-radius: 6px;
+      border: 1px solid #cbd5e1;
+      flex-shrink: 0;
+      background-color: #f1f5f9;
+      cursor: pointer;
+    }
+
     .item-info { flex: 1; }
     .item-title {
-      font-size: 0.98rem;
+      font-size: 0.96rem;
       font-weight: 700;
       color: #0f172a;
-      line-height: 1.3;
+      line-height: 1.35;
     }
     .item-sub {
       font-size: 0.8rem;
       color: #64748b;
-      margin-top: 2px;
+      margin-top: 3px;
     }
     .candidates-box {
       margin-top: 8px;
@@ -298,11 +298,10 @@
     <h2 id="mainHeading">📸 格位拍照批次盤點</h2>
     <p class="desc" id="mainDesc">請拍照比對物資，支援一圖多本，免開鍵盤打字！</p>
 
-    <!-- 預覽圖與狀態提示 -->
     <img id="previewImg" alt="預覽圖">
     <div id="statusBox" class="status-box"></div>
 
-    <!-- ==================== 1. 批次盤點模式 (mode === 'stocktake') ==================== -->
+    <!-- 盤點模式 -->
     <div id="stocktakeSection" style="display:none;">
       <label class="camera-trigger" for="cameraStocktakeFile">📷 開啟相機 拍攝架上物資</label>
       <input type="file" id="cameraStocktakeFile" style="display:none;" accept="image/*" capture="environment">
@@ -312,10 +311,9 @@
       <button id="btnContinueNext" class="close-btn" style="display:none;" onclick="continueNextBatch()">🔄 拍本格下一批物資</button>
     </div>
 
-    <!-- ==================== 2. 前置建檔雙照模式 (mode === 'inbound') ==================== -->
+    <!-- 建檔模式 -->
     <div id="inboundSection" style="display:none;">
       <div class="dual-photo-grid">
-        <!-- 槽位 1：封面 -->
         <label class="photo-slot" id="slotCover" for="cameraCoverFile">
           <div class="photo-slot-icon">📸</div>
           <div class="photo-slot-title">1. 拍攝封面 (必填)</div>
@@ -324,7 +322,6 @@
         </label>
         <input type="file" id="cameraCoverFile" style="display:none;" accept="image/*" capture="environment">
 
-        <!-- 槽位 2：版權頁 / CIP -->
         <label class="photo-slot" id="slotInner" for="cameraInnerFile">
           <div class="photo-slot-icon">📖</div>
           <div class="photo-slot-title">2. 拍版權頁 (選填)</div>
@@ -334,12 +331,10 @@
         <input type="file" id="cameraInnerFile" style="display:none;" accept="image/*" capture="environment">
       </div>
 
-      <!-- 觸發 AI 雙照比對按鈕 -->
       <button id="btnTriggerDualAnalyze" class="batch-submit-btn" style="display:none; margin-bottom:12px;" onclick="triggerDualAnalyze()">
         🚀 開始 AI 雙照比對辨識
       </button>
 
-      <!-- 辨識結果表單區塊 -->
       <div id="inboundFormFields" style="display:none;">
         <label class="field-lbl" for="itemName">物資品名 / 書名：</label>
         <input type="text" id="itemName" placeholder="AI 自動帶入，可手動修正">
@@ -392,7 +387,7 @@
       }
     });
 
-    // ==================== 建檔模式事件處理 ====================
+    // 建檔模式拍照
     document.getElementById('cameraCoverFile').addEventListener('change', function(e) {
       const file = e.target.files[0];
       if (!file) return;
@@ -576,7 +571,7 @@
 
       recognizedItemList = res.items;
       statusBox.className = 'status-box success';
-      statusBox.innerHTML = `✅ 已辨識出 ${res.items.length} 件物資！請核對數量後送出：`;
+      statusBox.innerHTML = `✅ 已辨識出 ${res.items.length} 件物資！請核對封面與數量後送出：`;
       container.innerHTML = '';
 
       res.items.forEach((item, index) => {
@@ -587,21 +582,29 @@
         let mainTitle = item.rawName;
         let mainAuthor = item.rawAuthor;
         let defaultSkuId = "";
+        let defaultImgUrl = "";
 
         if (item.candidates && item.candidates.length > 0) {
           defaultSkuId = item.candidates[0].skuId;
           mainTitle = item.candidates[0].itemName;
           mainAuthor = item.candidates[0].author || mainAuthor;
+          defaultImgUrl = item.candidates[0].imageUrl || ""; // 🌟 抓取庫存封面
         }
+
+        // 🌟 封面小圖元素
+        const imgHtml = defaultImgUrl
+          ? `<img id="thumb_${index}" src="${defaultImgUrl}" class="item-thumb" alt="封面" onclick="window.open('${defaultImgUrl}', '_blank')">`
+          : `<div id="thumb_${index}" class="item-thumb" style="display:flex;align-items:center;justify-content:center;color:#94a3b8;font-size:1.4rem;">📖</div>`;
 
         let candidatesHtml = '';
         if (item.candidates && item.candidates.length > 1) {
           candidatesHtml = `<div class="candidates-box"><small style="color:#b45309;font-weight:bold;">🔍 發現多筆相似物資，請點選眼前那一本：</small>`;
           item.candidates.forEach((cand, cIdx) => {
             const isChecked = cIdx === 0 ? 'checked' : '';
+            const candImg = cand.imageUrl || '';
             candidatesHtml += `
               <label class="candidate-label">
-                <input type="radio" name="skuChoice_${index}" value="${cand.skuId}" data-title="${cand.itemName}" ${isChecked} onchange="onCandidateChange(${index}, '${cand.skuId}', '${cand.itemName}')">
+                <input type="radio" name="skuChoice_${index}" value="${cand.skuId}" data-title="${cand.itemName}" data-img="${candImg}" ${isChecked} onchange="onCandidateChange(${index}, '${cand.skuId}', '${cand.itemName}', '${candImg}')">
                 <span>${cand.itemName} (${cand.skuId})</span>
               </label>
             `;
@@ -614,6 +617,7 @@
         itemCard.innerHTML = `
           <div class="item-header">
             <input type="checkbox" id="chk_${index}" checked onchange="toggleItemCheck(${index})">
+            ${imgHtml}
             <div class="item-info">
               <div class="item-title" id="title_${index}">${mainTitle}</div>
               <div class="item-sub">${mainAuthor ? '✍️ ' + mainAuthor : ''} <span id="skuBadge_${index}" style="color:#0284c7;">${defaultSkuId ? '[' + defaultSkuId + ']' : ''}</span></div>
@@ -645,10 +649,25 @@
       updateSubmitCount();
     }
 
-    function onCandidateChange(itemIndex, skuId, itemName) {
+    // 🌟 當單選候選項改變時，同步切換該項目的封面縮圖
+    function onCandidateChange(itemIndex, skuId, itemName, imgUrl) {
       document.getElementById(`selectedSkuId_${itemIndex}`).value = skuId;
       document.getElementById(`title_${itemIndex}`).innerText = itemName;
       document.getElementById(`skuBadge_${itemIndex}`).innerText = `[${skuId}]`;
+      const thumb = document.getElementById(`thumb_${itemIndex}`);
+      if (thumb && imgUrl) {
+        if (thumb.tagName === 'IMG') {
+          thumb.src = imgUrl;
+        } else {
+          // 原本是無圖佔位符，替換為 img
+          const newImg = document.createElement('img');
+          newImg.id = `thumb_${itemIndex}`;
+          newImg.src = imgUrl;
+          newImg.className = 'item-thumb';
+          newImg.onclick = () => window.open(imgUrl, '_blank');
+          thumb.parentNode.replaceChild(newImg, thumb);
+        }
+      }
     }
 
     function toggleItemCheck(index) {
