@@ -81,6 +81,133 @@ function getCategoriesForFrontend() {
 }
 
 /**
+ * 🌟 網頁【零庫存建檔模式】：接收「封面 + 版權頁」雙照片，並調用 Gemini 跨圖比對
+ */
+function uploadAndAnalyzeDualImages(coverBase64, innerBase64, mimeType) {
+  try {
+    if (!CONFIG.INBOUND_IMG_FOLDER_ID) {
+      throw new Error("系統未設定 INBOUND_IMG_FOLDER_ID 指令碼屬性");
+    }
+
+    const folder = DriveApp.getFolderById(CONFIG.INBOUND_IMG_FOLDER_ID);
+    const timestampStr = Utilities.formatDate(new Date(), "GMT+8", "yyyyMMdd_HHmmss");
+
+    // 1. 儲存封面圖片
+    let coverUrl = "";
+    if (coverBase64) {
+      const coverBlob = Utilities.newBlob(Utilities.base64Decode(coverBase64), mimeType || "image/jpeg", `COVER_${timestampStr}.jpg`);
+      const coverFile = folder.createFile(coverBlob);
+      coverUrl = `https://drive.google.com/uc?id=${coverFile.getId()}`;
+    }
+
+    // 2. 儲存內頁/版權頁圖片
+    let innerUrl = "";
+    if (innerBase64) {
+      const innerBlob = Utilities.newBlob(Utilities.base64Decode(innerBase64), mimeType || "image/jpeg", `CIP_${timestampStr}.jpg`);
+      const innerFile = folder.createFile(innerBlob);
+      innerUrl = `https://drive.google.com/uc?id=${innerFile.getId()}`;
+    }
+
+    // 3. 調用 Gemini Vision 雙圖分析
+    let aiResult = { itemName: "", author: "", barcode: "", category: "出版品與佛藝書籍" };
+    try {
+      aiResult = callGeminiDualImageRecognition(coverBase64, innerBase64, mimeType);
+    } catch (aiErr) {
+      writeDebugLog("Gemini 雙圖辨識例外: " + aiErr.message);
+    }
+
+    return {
+      success: true,
+      imageUrl: coverUrl,       // 實體封面 (供後續盤點展示)
+      innerImageUrl: innerUrl, // 內頁/版權頁存檔
+      recognizedName: aiResult.itemName || "",
+      author: aiResult.author || "",
+      barcode: aiResult.barcode || "",
+      category: aiResult.category || "出版品與佛藝書籍"
+    };
+  } catch (err) {
+    writeDebugLog("uploadAndAnalyzeDualImages 錯誤: " + err.message);
+    return { success: false, message: err.message };
+  }
+}
+
+/**
+ * 🌟 調用 Gemini Vision 同時分析「封面 + 內頁 CIP」
+ */
+function callGeminiDualImageRecognition(coverBase64, innerBase64, mimeType) {
+  if (!CONFIG.GEMINI_API_KEY) {
+    return { itemName: "", author: "", barcode: "", category: "出版品與佛藝書籍" };
+  }
+
+  const candidateModels = ["gemini-flash-lite-latest", "gemini-3.5-flash-lite", "gemini-3.8-flash"];
+
+  const prompt = `你是一個專業圖書編目專家。使用者提供了這本書的影像資料：
+${coverBase64 ? '- 第一張影像：書籍【封面】（有題名設計、視覺字體或裝幀外觀）。' : ''}
+${innerBase64 ? '- 第二張影像：書籍【版權頁 / 內頁 CIP 國家圖書館預行編目資料】（具有最標準權威的正題名、著譯者與 ISBN 編號）。' : ''}
+
+【提取準則】：
+1. 【物品名稱/書名】：優先以【版權頁/CIP】所標記的正式出版品書名為準（例如CIP寫《唯識史觀及其哲學》，請精準提取正題名；若有副標題或卷號可適當組合）。
+2. 【作者/著者】：優先以版權頁/CIP所載之著者、譯者或註述者姓名為主（例如「法紡法師」、「釋寬謙」）。
+3. 【ISBN或條碼】：請從版權頁的 ISBN 欄位（例如 957-665-093-3）提取純數字條碼（去除連字號與括號說明）。若有多個 ISBN（如精裝/平裝），請優先提取與現書相符或平裝的純數字。
+4. 【大類名稱】：推論所屬大類（出版品與佛藝書籍、宗教與儀式物品、專業影音廣播、辦公與生活家電、消耗品與雜項）。
+
+請務必只回傳標準 JSON 字串：
+{"itemName": "完整書名", "author": "作者姓名", "barcode": "純數字ISBN", "category": "大類名稱"}`;
+
+  const parts = [{ text: prompt }];
+
+  if (coverBase64) {
+    parts.push({
+      inlineData: { mimeType: mimeType || "image/jpeg", data: coverBase64 }
+    });
+  }
+
+  if (innerBase64) {
+    parts.push({
+      inlineData: { mimeType: mimeType || "image/jpeg", data: innerBase64 }
+    });
+  }
+
+  const payload = {
+    contents: [{ parts: parts }],
+    generationConfig: { responseMimeType: "application/json" }
+  };
+
+  const options = {
+    method: "post",
+    contentType: "application/json",
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true
+  };
+
+  for (const model of candidateModels) {
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
+    try {
+      const response = UrlFetchApp.fetch(endpoint, options);
+      if (response.getResponseCode() === 200) {
+        const resJson = JSON.parse(response.getContentText());
+        if (resJson.candidates && resJson.candidates[0].content && resJson.candidates[0].content.parts[0].text) {
+          let raw = resJson.candidates[0].content.parts[0].text;
+          raw = raw.replace(/```json/gi, '').replace(/```/g, '').trim();
+          return JSON.parse(raw);
+        }
+      } else if (response.getResponseCode() === 503 || response.getResponseCode() === 429) {
+        Utilities.sleep(300);
+      }
+    } catch (err) {}
+  }
+
+  return { itemName: "", author: "", barcode: "", category: "出版品與佛藝書籍" };
+}
+
+/**
+ * 相容舊呼叫封裝
+ */
+function uploadAndAnalyzeImage(base64Data, mimeType) {
+  return uploadAndAnalyzeDualImages(base64Data, null, mimeType);
+}
+
+/**
  * 網頁【拍照盤點模式】專用：多物資識別與庫存主檔自動匹配
  */
 function analyzeStocktakePhoto(base64Data, mimeType) {
@@ -89,10 +216,8 @@ function analyzeStocktakePhoto(base64Data, mimeType) {
       throw new Error("未設定 GEMINI_API_KEY");
     }
 
-    // 1. 調用 Gemini Vision 多物件辨識
     const recognizedList = callGeminiMultiItemRecognition(base64Data, mimeType);
 
-    // 2. 對辨識出的每一個品項比對 SKU_MASTER
     const results = recognizedList.map(item => {
       const keyword = item.itemName || "";
       const matched = keyword ? findSKU(keyword) : [];
@@ -120,15 +245,8 @@ function analyzeStocktakePhoto(base64Data, mimeType) {
   }
 }
 
-/**
- * 調用 Gemini 辨識畫面中的「多件」物資/書籍
- */
 function callGeminiMultiItemRecognition(base64Data, mimeType) {
-  const candidateModels = [
-    "gemini-flash-lite-latest",
-    "gemini-3.5-flash-lite",
-    "gemini-3.8-flash"
-  ];
+  const candidateModels = ["gemini-flash-lite-latest", "gemini-3.5-flash-lite", "gemini-3.8-flash"];
 
   const prompt = `你是一個專業的圖書與佛寺物資盤點助理。請觀察這張照片，辨識畫面中出現的所有書籍或物品：
 1. 找出畫面中所有清楚可見的書籍品名/書名（若有期數，如《覺風期刊 第82期》，請務必完整保留）。
@@ -163,29 +281,20 @@ function callGeminiMultiItemRecognition(base64Data, mimeType) {
     const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
     try {
       const response = UrlFetchApp.fetch(endpoint, options);
-      const resCode = response.getResponseCode();
-      const resText = response.getContentText();
-
-      if (resCode === 200) {
-        const resJson = JSON.parse(resText);
+      if (response.getResponseCode() === 200) {
+        const resJson = JSON.parse(response.getContentText());
         if (resJson.candidates && resJson.candidates[0].content && resJson.candidates[0].content.parts[0].text) {
-          const parsed = JSON.parse(resJson.candidates[0].content.parts[0].text);
+          let raw = resJson.candidates[0].content.parts[0].text;
+          raw = raw.replace(/```json/gi, '').replace(/```/g, '').trim();
+          const parsed = JSON.parse(raw);
           return parsed.items || [];
         }
-      } else if (resCode === 503 || resCode === 429) {
-        Utilities.sleep(300);
       }
-    } catch (err) {
-      writeDebugLog(`callGeminiMultiItemRecognition [${model}] 例外: ${err.message}`);
-    }
+    } catch (err) {}
   }
-
   return [];
 }
 
-/**
- * 網頁【拍照盤點模式】專用：一鍵批次寫入庫存與記錄
- */
 function batchUpdateStock(cellCode, userId, items) {
   try {
     return executeBatchStockWorkflow(userId, cellCode, items);
@@ -195,119 +304,6 @@ function batchUpdateStock(cellCode, userId, items) {
   }
 }
 
-/**
- * 網頁【零庫存建檔模式】專用：單圖分析
- */
-function uploadAndAnalyzeImage(base64Data, mimeType) {
-  try {
-    if (!CONFIG.INBOUND_IMG_FOLDER_ID) {
-      throw new Error("系統未設定 INBOUND_IMG_FOLDER_ID 指令碼屬性");
-    }
-    
-    const decodedBytes = Utilities.base64Decode(base64Data);
-    const fileName = "SKU_" + Utilities.formatDate(new Date(), "GMT+8", "yyyyMMdd_HHmmss") + ".jpg";
-    const blob = Utilities.newBlob(decodedBytes, mimeType || "image/jpeg", fileName);
-    
-    const folder = DriveApp.getFolderById(CONFIG.INBOUND_IMG_FOLDER_ID);
-    const file = folder.createFile(blob);
-    const fileUrl = `https://drive.google.com/uc?id=${file.getId()}`;
-
-    let aiResult = { itemName: "", author: "", barcode: "", category: "出版品與佛藝書籍" };
-    try {
-      aiResult = callGeminiVisionRecognition(base64Data, mimeType);
-    } catch (aiErr) {
-      writeDebugLog("Gemini 辨識例外: " + aiErr.message);
-    }
-
-    return {
-      success: true,
-      imageUrl: fileUrl,
-      recognizedName: aiResult.itemName || "",
-      author: aiResult.author || "",
-      barcode: aiResult.barcode || "",
-      category: aiResult.category || "出版品與佛藝書籍"
-    };
-  } catch (err) {
-    writeDebugLog("uploadAndAnalyzeImage 錯誤: " + err.message);
-    return { success: false, message: err.message };
-  }
-}
-
-function callGeminiVisionRecognition(base64Data, mimeType) {
-  if (!CONFIG.GEMINI_API_KEY) {
-    return { itemName: "", author: "", barcode: "", category: "出版品與佛藝書籍" };
-  }
-
-  const candidateModels = ["gemini-flash-lite-latest", "gemini-3.5-flash-lite", "gemini-3.8-flash"];
-  const prompt = `你是一個專業的圖書與佛寺物資建檔助理。請仔細觀察這張照片：
-1. 辨識照片中的【完整書籍書名/物品品名】（例如《大智慧到彼岸》，若有副標題可一併保留）。
-2. 辨識書籍的【作者/著者/編譯者】姓名（例如「釋寬謙」、「印順導師」；若非書籍或未標明作者，請填空字串 ""）。
-3. 若有看到 ISBN 或商品條碼數字，請擷取出來；若無則填空字串 ""。
-4. 推論所屬物資大類（請對應：出版品與佛藝書籍、宗教與儀式物品、專業影音廣播、辦公與生活家電、消耗品與雜項）。
-請務必只回傳合法的 JSON 字串，格式嚴格限定為：
-{"itemName": "品名或書名", "author": "作者姓名", "barcode": "ISBN或條碼", "category": "大類名稱"}`;
-
-  const payload = {
-    contents: [{
-      parts: [
-        { text: prompt },
-        { inlineData: { mimeType: mimeType || "image/jpeg", data: base64Data } }
-      ]
-    }],
-    generationConfig: { responseMimeType: "application/json" }
-  };
-
-  const options = {
-    method: "post",
-    contentType: "application/json",
-    payload: JSON.stringify(payload),
-    muteHttpExceptions: true
-  };
-
-  for (const model of candidateModels) {
-    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
-    try {
-      const response = UrlFetchApp.fetch(endpoint, options);
-      if (response.getResponseCode() === 200) {
-        const resJson = JSON.parse(response.getContentText());
-        if (resJson.candidates && resJson.candidates[0].content && resJson.candidates[0].content.parts[0].text) {
-          return JSON.parse(resJson.candidates[0].content.parts[0].text);
-        }
-      }
-    } catch (err) {}
-  }
-  return { itemName: "", author: "", barcode: "", category: "出版品與佛藝書籍" };
-}
-
-function recognizeBarcodeOnly(base64Data, mimeType) {
-  if (!CONFIG.GEMINI_API_KEY) return { success: false, barcode: "" };
-
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
-  const prompt = `你是一個專業條碼與 ISBN 辨識工具。找出照片中印出的純數字條碼（去除連字號）。回傳標準 JSON：{"barcode": "純數字條碼"}`;
-
-  try {
-    const response = UrlFetchApp.fetch(endpoint, {
-      method: "post",
-      contentType: "application/json",
-      payload: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType: mimeType || "image/jpeg", data: base64Data } }] }],
-        generationConfig: { responseMimeType: "application/json" }
-      }),
-      muteHttpExceptions: true
-    });
-
-    if (response.getResponseCode() === 200) {
-      const resJson = JSON.parse(response.getContentText());
-      if (resJson.candidates && resJson.candidates[0].content && resJson.candidates[0].content.parts[0].text) {
-        const parsed = JSON.parse(resJson.candidates[0].content.parts[0].text);
-        return { success: true, barcode: (parsed.barcode || "").replace(/[^0-9]/g, "") };
-      }
-    }
-  } catch (err) {}
-
-  return { success: false, barcode: "" };
-}
-
 function createSkuMasterItem(data) {
   try {
     const newSku = appendSkuMasterRecord({
@@ -315,10 +311,11 @@ function createSkuMasterItem(data) {
       author: data.author || "",
       category: data.category,
       barcode: data.barcode || "",
-      imageUrl: data.imageUrl || ""
+      imageUrl: data.imageUrl || "",
+      innerImageUrl: data.innerImageUrl || ""
     });
 
-    const statusNote = newSku.isExisting ? "（已存在物資，已更新封面）" : "（新建物資）";
+    const statusNote = newSku.isExisting ? "（已存在物資，已更新圖片）" : "（新建物資）";
     return { 
       success: true, 
       skuId: newSku.id, 
@@ -452,7 +449,7 @@ const StateHandlers = {
     ctx.session.shelfName = matchedShelf.name;
     SessionManager.save(ctx.lineUid, ctx.session);
 
-    // 🌟 產生帶有當前格位參數的 Web App 盤點 URL
+    // 產生帶有當前格位參數的 Web App 盤點 URL
     const webAppStocktakeUrl = `${CONFIG.WEB_APP_URL}?mode=stocktake` +
       `&cell=${encodeURIComponent(cellCode)}` +
       `&uid=${encodeURIComponent(ctx.userId)}` +
@@ -557,7 +554,6 @@ function handleLineMessage(event) {
   const cachedSession = SessionManager.get(lineUid);
   const currentVolunteer = getVolunteerByLineUid(lineUid);
   
-  // 👥 流程 A：未綁定志工身份驗證流程
   if (!currentVolunteer) {
     if (cachedSession) {
       if (cachedSession.state === STATE.BINDING_NAME) {
@@ -579,7 +575,6 @@ function handleLineMessage(event) {
     return;
   }
 
-  // 👑 流程 B：已認證人員處理
   const myUserId = currentVolunteer['人員編號'];
   const myName = currentVolunteer['人員姓名'];
   const myDept = currentVolunteer['隸屬組織/部門'] || "基本志工";

@@ -97,6 +97,7 @@ function appendSkuMasterRecord(data) {
     const unitIdx = colMap['單位'];
     const barcodeIdx = colMap['條碼編號'] !== undefined ? colMap['條碼編號'] : colMap['ISBN/條碼'];
     const imgIdx = colMap['封面圖片URL'] !== undefined ? colMap['封面圖片URL'] : colMap['圖片網址'];
+    const innerImgIdx = colMap['內頁圖片URL'] !== undefined ? colMap['內頁圖片URL'] : colMap['版權頁圖片URL'];
     const sourceIdx = colMap['建檔來源'];
     const creatorIdx = colMap['建立人員'];
     const timeIdx = colMap['建立時間'];
@@ -105,12 +106,16 @@ function appendSkuMasterRecord(data) {
       throw new Error("SKU_MASTER 缺少必要欄位 (品項編號 / 物品名稱)");
     }
 
+    // 1. 查重比對：品名完全相同者直接回傳，若已有資料但缺圖則補上
     const normalizedTarget = cleanName.replace(/\s+/g, "").toLowerCase();
     for (let i = 1; i < rows.length; i++) {
       const existingName = rows[i][itemNameIdx] ? rows[i][itemNameIdx].toString().replace(/\s+/g, "").toLowerCase() : "";
       if (existingName === normalizedTarget) {
         if (imgIdx !== undefined && !rows[i][imgIdx] && data.imageUrl) {
           sheet.getRange(i + 1, imgIdx + 1).setValue(data.imageUrl);
+        }
+        if (innerImgIdx !== undefined && !rows[i][innerImgIdx] && data.innerImageUrl) {
+          sheet.getRange(i + 1, innerImgIdx + 1).setValue(data.innerImageUrl);
         }
         return {
           id: rows[i][skuIdIdx].toString(),
@@ -120,6 +125,7 @@ function appendSkuMasterRecord(data) {
       }
     }
 
+    // 2. 計算該大類最大流水號 (格式如：H0000001)
     let maxSerial = 0;
     const prefixRegex = new RegExp(`^${categoryCode}-?(\\d+)$`, 'i');
 
@@ -138,6 +144,7 @@ function appendSkuMasterRecord(data) {
     const newSkuId = `${categoryCode}${String(nextSerial).padStart(7, '0')}`;
     const timestamp = Utilities.formatDate(new Date(), "GMT+8", "yyyy-MM-dd HH:mm:ss");
 
+    // 3. 組裝寫入列
     const newRow = new Array(rows[0].length).fill("");
     newRow[skuIdIdx] = newSkuId;
     if (cateCodeIdx !== undefined) newRow[cateCodeIdx] = categoryCode;
@@ -147,6 +154,7 @@ function appendSkuMasterRecord(data) {
     if (unitIdx !== undefined) newRow[unitIdx] = data.unit || "本";
     if (barcodeIdx !== undefined) newRow[barcodeIdx] = data.barcode || "";
     if (imgIdx !== undefined) newRow[imgIdx] = data.imageUrl || "";
+    if (innerImgIdx !== undefined) newRow[innerImgIdx] = data.innerImageUrl || "";
     if (sourceIdx !== undefined) newRow[sourceIdx] = data.source || "LINE拍照入庫";
     if (creatorIdx !== undefined) newRow[creatorIdx] = data.creator || "系統建檔";
     if (timeIdx !== undefined) newRow[timeIdx] = timestamp;
@@ -184,9 +192,6 @@ function createPreStockSkuMasterWithCategory(itemName, categoryCode, categoryNam
 
 // ==================== 3. 庫存盤點與批次更新模組 ====================
 
-/**
- * 🌟 批次盤點更新核心（單一鎖定事務，支援一圖多本寫入）
- */
 function executeBatchStockWorkflow(userId, cellCode, items) {
   if (!items || items.length === 0) {
     return { success: false, message: "無待更新項目" };

@@ -24,7 +24,7 @@ function replyFlexInboundPromptCard(replyToken, userName) {
       "contents": [
         {
           "type": "text",
-          "text": "此功能專用於【新物資前置建檔】。\n拍照後由 AI 辨識品名、作者與條碼，自動存入物資主檔 (SKU_MASTER)，不涉及儲位與庫存數量。",
+          "text": "此功能專用於【新物資前置建檔】。\n支援「封面外觀 + 版權頁」雙照比對，自動提取標準書名與 ISBN 存入主檔。",
           "size": "sm",
           "color": "#374151",
           "wrap": true
@@ -270,9 +270,6 @@ function replyFlexMenuCard(replyToken, title, subtitle, items, backBtnLabel = nu
   });
 }
 
-/**
- * 🌟 進入格位引導卡片（頂部新增大按鈕直接開啟瀏覽器相機拍照盤點）
- */
 function replyFlexSearchPromptCard(replyToken, spaceName, boxName, shelfName, cellCode, isRetry = false, webAppStocktakeUrl = null) {
   const currentBoxLabel = boxName || "同櫃子";
   const cleanBoxName = currentBoxLabel.includes('-') ? currentBoxLabel.split('-')[1].split('(')[0] : (currentBoxLabel.split('(')[0] || "同櫃");
@@ -295,7 +292,6 @@ function replyFlexSearchPromptCard(replyToken, spaceName, boxName, shelfName, ce
     }
   ];
 
-  // 🌟 若有傳入 Web App 網址，放置最顯眼的拍照大按鈕
   if (webAppStocktakeUrl) {
     bodyContents.push({
       "type": "button",
@@ -713,7 +709,9 @@ function replyFlexSkuVerticalList(replyToken, skus) {
     const cateName = (s['大類名稱'] || s['大類'] || s['category'] || "一般物資").toString().trim();
     const author = (s['規格或作者'] || s['規格/作者'] || s['作者'] || s['規格'] || s['author'] || "").toString().trim();
     const barcode = (s['條碼編號'] || s['ISBN/條碼'] || s['barcode'] || "").toString().trim();
-    let rawImgUrl = (s['封面圖片URL'] || s['圖片網址'] || s['imageUrl'] || "").toString().trim();
+    
+    // 🌟 圖片降級策略：優先讀取封面，若無封面則回退顯示內頁/版權頁
+    let rawImgUrl = (s['封面圖片URL'] || s['圖片網址'] || s['內頁圖片URL'] || s['版權頁圖片URL'] || "").toString().trim();
 
     let thumbUrl = rawImgUrl;
     let fullImgUrl = rawImgUrl;
@@ -835,7 +833,9 @@ function replyFlexConfirmSingleSkuCard(replyToken, targetSku, userName) {
   const cateName = (targetSku['大類名稱'] || targetSku['大類'] || targetSku['category'] || "一般物資").toString().trim();
   const author = (targetSku['規格或作者'] || targetSku['規格/作者'] || targetSku['作者'] || targetSku['規格'] || targetSku['author'] || "").toString().trim();
   const barcode = (targetSku['條碼編號'] || targetSku['ISBN/條碼'] || targetSku['barcode'] || "").toString().trim();
-  let rawImgUrl = (targetSku['封面圖片URL'] || targetSku['圖片網址'] || targetSku['imageUrl'] || "").toString().trim();
+  
+  // 🌟 圖片降級策略
+  let rawImgUrl = (targetSku['封面圖片URL'] || targetSku['圖片網址'] || targetSku['內頁圖片URL'] || targetSku['版權頁圖片URL'] || "").toString().trim();
 
   let fullImgUrl = rawImgUrl;
   if (rawImgUrl.includes("drive.google.com")) {
@@ -891,7 +891,6 @@ function replyFlexConfirmSingleSkuCard(replyToken, targetSku, userName) {
     ]
   });
 
-  // 🌟 常用數量快捷按鈕
   bodyContents.push({
     "type": "box",
     "layout": "horizontal",
