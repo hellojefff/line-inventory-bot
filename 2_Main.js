@@ -190,7 +190,7 @@ function uploadAndAnalyzeImage(base64Data, mimeType) {
 }
 
 /**
- * 🌟 網頁【拍照盤點模式】：多物資識別與庫存主檔自動匹配（支援標準化比對與縮圖帶出）
+ * 網頁【拍照盤點模式】：多物資識別與庫存主檔自動匹配
  */
 function analyzeStocktakePhoto(base64Data, mimeType) {
   try {
@@ -203,7 +203,6 @@ function analyzeStocktakePhoto(base64Data, mimeType) {
     const results = recognizedList.map(item => {
       const keyword = item.itemName || "";
       const barcode = item.barcode || "";
-      // 🌟 同時帶入書名與條碼進行標準化模糊查詢
       const matched = (keyword || barcode) ? findSKU(keyword, barcode) : [];
 
       const candidates = matched.map(m => {
@@ -285,7 +284,7 @@ function callGeminiMultiItemRecognition(base64Data, mimeType) {
           const parsed = JSON.parse(raw);
           return parsed.items || [];
         }
-      } catch (err) {}
+      }
     } catch (err) {}
   }
   return [];
@@ -423,7 +422,8 @@ const StateHandlers = {
     ctx.session.boxName = selectedBoxStr;
     SessionManager.save(ctx.lineUid, ctx.session);
     const shelfItems = shelves.map(s => ({ title: `📍 ${s.name}`, desc: `格位：${s.short_code}`, value: s.cell_code }));
-    replyFlexMenuCard(ctx.replyToken, "🚪 選擇盤點層格", `已對齊櫃體：【${selectedBoxStr}】\n請點選具體【層格】：`, shelfItems, `↩️ 返回 [${session.zoneName || "櫃位分區"}]`);
+    // 🌟 修正處：改為 ctx.session.zoneName，排除變數未定義錯誤
+    replyFlexMenuCard(ctx.replyToken, "🚪 選擇盤點層格", `已對齊櫃體：【${selectedBoxStr}】\n請點選具體【層格】：`, shelfItems, `↩️ 返回 [${ctx.session.zoneName || "櫃位分區"}]`);
   },
 
   [STATE.CHOOSE_CELL]: function(ctx) {
@@ -549,6 +549,7 @@ function handleLineMessage(event) {
   const cachedSession = SessionManager.get(lineUid);
   const currentVolunteer = getVolunteerByLineUid(lineUid);
   
+  // 1. 未認證身分處理
   if (!currentVolunteer) {
     if (cachedSession) {
       if (cachedSession.state === STATE.BINDING_NAME) {
@@ -575,6 +576,7 @@ function handleLineMessage(event) {
   const myDept = currentVolunteer['隸屬組織/部門'] || "基本志工";
   const myTitle = currentVolunteer['職稱/身份'] || "志工";
 
+  // 2. 常規全域靜態指令
   if (userMessage === '綁定身份') {
     replyTextMessage(replyToken, `💡 溫馨提醒：\n${myName} 您好，您已完成志工身份認證！\n\n編號：[${myUserId}]\n單位：${myDept}\n職稱：${myTitle}\n\n您的權限已開通，請點選「📸 拍照入庫」或「📷 開始盤點」進行作業！🙏`);
     return;
@@ -596,28 +598,45 @@ function handleLineMessage(event) {
     return;
   }
 
-  if (userMessage === '開始盤點' || userMessage === CMD.CHANGE_SITE || !cachedSession) {
-    const sites = getAllSites(); 
-    if (sites.length === 0) {
-      replyTextMessage(replyToken, `⚠️ 系統後台 LOC_MASTER 尚未設定任何據點，請先聯繫管理員建檔。`);
-      return;
-    }
-    SessionManager.save(lineUid, { state: STATE.CHOOSE_SITE });
-    const menuItems = sites.map(site => ({ title: site, desc: "點擊進入此據點", value: site }));
-    replyFlexMenuCard(replyToken, "🙏 選擇盤點據點", `${myName} 您好，請點選您所在的【據點】：`, menuItems, null);
-    return;
-  }
-
+  // 3. 優先處理返回與控制指令（避免因 Session 為空而被提前攔截）
   if (userMessage.startsWith(UI.BTN_BACK_PREFIX)) {
-    handleGoBack(replyToken, lineUid, cachedSession, myName);
+    if (cachedSession) {
+      handleGoBack(replyToken, lineUid, cachedSession, myName);
+    } else {
+      // 若無 Session 則返回最上層據點選單
+      startNewStocktake(replyToken, lineUid, myName);
+    }
     return;
   }
 
   if (isSystemControlCommand(userMessage)) {
-    handleSystemCommand(replyToken, lineUid, cachedSession, userMessage, myName);
+    if (cachedSession) {
+      handleSystemCommand(replyToken, lineUid, cachedSession, userMessage, myName);
+    } else {
+      startNewStocktake(replyToken, lineUid, myName);
+    }
+    return;
+  }
+
+  // 4. 明確輸入「開始盤點」或「更換據點」
+  if (userMessage === '開始盤點' || userMessage === CMD.CHANGE_SITE) {
+    startNewStocktake(replyToken, lineUid, myName);
+    return;
+  }
+
+  // 5. 若當前沒有 Session，但使用者輸入了文字（例如想打字搜尋品名）
+  if (!cachedSession) {
+    // 嘗試以輸入內容進行 SKU 搜尋，若找得到則友善提示先定位
+    const skus = findSKU(userMessage);
+    if (skus.length > 0) {
+      replyTextMessage(replyToken, `🔍 找到物資【${skus[0]['物品名稱']}】，但您尚未選定盤點格位。\n\n請先點擊下方選單的「📷 開始盤點」選定櫃位與層格，再進行物資盤點與入庫！🙏`);
+    } else {
+      startNewStocktake(replyToken, lineUid, myName);
+    }
     return;
   }
   
+  // 6. 狀態機正常處理流程
   const handler = StateHandlers[cachedSession.state];
   if (handler) {
     handler({
@@ -630,5 +649,20 @@ function handleLineMessage(event) {
     });
   } else {
     writeDebugLog(`未知的 Session 狀態: ${cachedSession.state}`);
+    startNewStocktake(replyToken, lineUid, myName);
   }
+}
+
+/**
+ * 輔助函式：啟動新盤點流程並展現據點卡片
+ */
+function startNewStocktake(replyToken, lineUid, myName) {
+  const sites = getAllSites(); 
+  if (sites.length === 0) {
+    replyTextMessage(replyToken, `⚠️ 系統後台 LOC_MASTER 尚未設定任何據點，請先聯繫管理員建檔。`);
+    return;
+  }
+  SessionManager.save(lineUid, { state: STATE.CHOOSE_SITE });
+  const menuItems = sites.map(site => ({ title: site, desc: "點擊進入此據點", value: site }));
+  replyFlexMenuCard(replyToken, "🙏 選擇盤點據點", `${myName} 您好，請點選您所在的【據點】：`, menuItems, null);
 }
