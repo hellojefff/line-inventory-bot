@@ -130,7 +130,7 @@
     .status-box.success { display: block; background: #dcfce7; color: #15803d; border: 1px solid #bbf7d0; }
     .status-box.error { display: block; background: #fee2e2; color: #b91c1c; border: 1px solid #fecaca; }
 
-    /* 批次盤點項目清單樣式 */
+    /* 批次盤點卡片樣式 */
     .item-card {
       background: #ffffff;
       border: 1.5px solid #cbd5e1;
@@ -156,7 +156,6 @@
       accent-color: #16a34a;
     }
 
-    /* 🌟 盤點卡片內的封面縮圖樣式 */
     .item-thumb {
       width: 52px;
       height: 72px;
@@ -180,6 +179,35 @@
       color: #64748b;
       margin-top: 3px;
     }
+
+    /* 🌟 卡片快捷輔助按鈕工具列 */
+    .card-tools {
+      display: flex;
+      gap: 6px;
+      margin-top: 8px;
+    }
+    .tool-btn {
+      background: #f8fafc;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      font-size: 0.75rem;
+      color: #475569;
+      padding: 4px 8px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-weight: 500;
+    }
+    .tool-btn:hover {
+      background: #e2e8f0;
+    }
+    .tool-btn.blue {
+      border-color: #93c5fd;
+      color: #0284c7;
+      background: #f0f9ff;
+    }
+
     .candidates-box {
       margin-top: 8px;
       padding-top: 8px;
@@ -285,6 +313,44 @@
       font-size: 0.95rem;
       outline: none;
     }
+
+    /* 🌟 微調搜尋互動彈窗 */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.5);
+      z-index: 1000;
+      justify-content: center;
+      align-items: center;
+      padding: 16px;
+    }
+    .modal-box {
+      background: #fff;
+      border-radius: 12px;
+      padding: 16px;
+      width: 100%;
+      max-width: 440px;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.2);
+    }
+    .search-result-list {
+      max-height: 220px;
+      overflow-y: auto;
+      margin: 10px 0;
+      border: 1px solid #e2e8f0;
+      border-radius: 6px;
+    }
+    .search-result-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px;
+      border-bottom: 1px solid #f1f5f9;
+      cursor: pointer;
+    }
+    .search-result-item:hover {
+      background: #f0fdf4;
+    }
   </style>
 </head>
 <body>
@@ -305,6 +371,9 @@
     <div id="stocktakeSection" style="display:none;">
       <label class="camera-trigger" for="cameraStocktakeFile">📷 開啟相機 拍攝架上物資</label>
       <input type="file" id="cameraStocktakeFile" style="display:none;" accept="image/*" capture="environment">
+
+      <!-- 專屬單書補拍版權頁相機 -->
+      <input type="file" id="cameraSingleCipFile" style="display:none;" accept="image/*" capture="environment">
 
       <div id="itemsContainer"></div>
       <button id="batchSubmitBtn" class="batch-submit-btn" style="display:none;" onclick="submitBatchStocktake()">💾 確認並寫入庫存 (0 件)</button>
@@ -356,6 +425,22 @@
     </div>
   </div>
 
+  <!-- 🌟 微調搜尋 Modal 視窗 -->
+  <div id="searchModal" class="modal-overlay">
+    <div class="modal-box">
+      <h3 style="font-size:1.1rem; margin-bottom:8px;">🔍 手動微調搜尋主檔</h3>
+      <p style="font-size:0.8rem; color:#64748b; margin-bottom:10px;">可輸入書名關鍵字、作者或副標題：</p>
+      <div style="display:flex; gap:6px;">
+        <input type="text" id="modalSearchInput" placeholder="例：寂靜道、法命">
+        <button type="button" class="tool-btn blue" style="padding:0 14px; font-weight:bold;" onclick="executeModalSearch()">搜尋</button>
+      </div>
+      <div id="modalSearchResult" class="search-result-list"></div>
+      <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:10px;">
+        <button type="button" class="tool-btn" onclick="closeSearchModal()">取消關閉</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     const urlParams = new URLSearchParams(window.location.search);
     const PAGE_MODE = urlParams.get('mode') || "<?= mode ?>" || "inbound";
@@ -367,6 +452,7 @@
     let recognizedItemList = [];
     let coverBase64Data = null;
     let innerBase64Data = null;
+    let activeCardIndex = null;
 
     window.addEventListener('DOMContentLoaded', () => {
       if (PAGE_MODE === 'stocktake') {
@@ -387,7 +473,7 @@
       }
     });
 
-    // 建檔模式拍照
+    // ==================== 建檔模式事件處理 ====================
     document.getElementById('cameraCoverFile').addEventListener('change', function(e) {
       const file = e.target.files[0];
       if (!file) return;
@@ -588,10 +674,9 @@
           defaultSkuId = item.candidates[0].skuId;
           mainTitle = item.candidates[0].itemName;
           mainAuthor = item.candidates[0].author || mainAuthor;
-          defaultImgUrl = item.candidates[0].imageUrl || ""; // 🌟 抓取庫存封面
+          defaultImgUrl = item.candidates[0].imageUrl || "";
         }
 
-        // 🌟 封面小圖元素
         const imgHtml = defaultImgUrl
           ? `<img id="thumb_${index}" src="${defaultImgUrl}" class="item-thumb" alt="封面" onclick="window.open('${defaultImgUrl}', '_blank')">`
           : `<div id="thumb_${index}" class="item-thumb" style="display:flex;align-items:center;justify-content:center;color:#94a3b8;font-size:1.4rem;">📖</div>`;
@@ -611,7 +696,7 @@
           });
           candidatesHtml += `</div>`;
         } else if (item.candidates && item.candidates.length === 0) {
-          candidatesHtml = `<div class="candidates-box"><small style="color:#dc2626;">⚠️ 庫存主檔尚無此物資記錄</small></div>`;
+          candidatesHtml = `<div class="candidates-box" id="unmatchedNotice_${index}"><small style="color:#dc2626;">⚠️ 庫存主檔尚無此物資記錄</small></div>`;
         }
 
         itemCard.innerHTML = `
@@ -620,7 +705,14 @@
             ${imgHtml}
             <div class="item-info">
               <div class="item-title" id="title_${index}">${mainTitle}</div>
-              <div class="item-sub">${mainAuthor ? '✍️ ' + mainAuthor : ''} <span id="skuBadge_${index}" style="color:#0284c7;">${defaultSkuId ? '[' + defaultSkuId + ']' : ''}</span></div>
+              <div class="item-sub">${mainAuthor ? '✍️ ' + mainAuthor : ''} <span id="skuBadge_${index}" style="color:#0284c7; font-weight:bold;">${defaultSkuId ? '[' + defaultSkuId + ']' : ''}</span></div>
+              
+              <!-- 🌟 專屬微調與補拍快捷按鈕列 -->
+              <div class="card-tools">
+                <button type="button" class="tool-btn" onclick="openSearchModal(${index})">🔍 微調搜尋</button>
+                <button type="button" class="tool-btn blue" onclick="triggerSingleCip(${index})">📖 補拍版權頁</button>
+              </div>
+
               ${candidatesHtml}
             </div>
           </div>
@@ -649,17 +741,21 @@
       updateSubmitCount();
     }
 
-    // 🌟 當單選候選項改變時，同步切換該項目的封面縮圖
     function onCandidateChange(itemIndex, skuId, itemName, imgUrl) {
       document.getElementById(`selectedSkuId_${itemIndex}`).value = skuId;
       document.getElementById(`title_${itemIndex}`).innerText = itemName;
       document.getElementById(`skuBadge_${itemIndex}`).innerText = `[${skuId}]`;
+      updateCardThumbnail(itemIndex, imgUrl);
+      updateSubmitCount();
+    }
+
+    function updateCardThumbnail(itemIndex, imgUrl) {
       const thumb = document.getElementById(`thumb_${itemIndex}`);
-      if (thumb && imgUrl) {
+      if (!thumb) return;
+      if (imgUrl) {
         if (thumb.tagName === 'IMG') {
           thumb.src = imgUrl;
         } else {
-          // 原本是無圖佔位符，替換為 img
           const newImg = document.createElement('img');
           newImg.id = `thumb_${itemIndex}`;
           newImg.src = imgUrl;
@@ -668,6 +764,112 @@
           thumb.parentNode.replaceChild(newImg, thumb);
         }
       }
+    }
+
+    // ==================== 🌟 專屬補拍版權頁邏輯 ====================
+    function triggerSingleCip(index) {
+      activeCardIndex = index;
+      document.getElementById('cameraSingleCipFile').click();
+    }
+
+    document.getElementById('cameraSingleCipFile').addEventListener('change', function(e) {
+      const file = e.target.files[0];
+      if (!file || activeCardIndex === null) return;
+
+      const statusBox = document.getElementById('statusBox');
+      statusBox.className = 'status-box loading';
+      statusBox.innerHTML = `⏳ 正在比對第 ${activeCardIndex + 1} 本物資的【版權頁 / CIP】，請稍候...`;
+
+      compressAndConvertToBase64(file, (base64Data, mimeType) => {
+        google.script.run
+          .withSuccessHandler(res => {
+            if (res.success && res.candidates && res.candidates.length > 0) {
+              const bestMatch = res.candidates[0];
+              onCandidateChange(activeCardIndex, bestMatch.skuId, bestMatch.itemName, bestMatch.imageUrl);
+              
+              const notice = document.getElementById(`unmatchedNotice_${activeCardIndex}`);
+              if (notice) notice.style.display = 'none';
+
+              statusBox.className = 'status-box success';
+              statusBox.innerHTML = `🎉 成功透過版權頁比對出【${bestMatch.itemName}】！`;
+            } else {
+              statusBox.className = 'status-box error';
+              statusBox.innerHTML = `⚠️ 版權頁辨識為《${res.itemName || '未知'}》，但主檔仍無對應紀錄。可點擊「微調搜尋」手動指定。`;
+              if (res.itemName) {
+                document.getElementById(`title_${activeCardIndex}`).innerText = res.itemName;
+              }
+            }
+          })
+          .withFailureHandler(err => {
+            statusBox.className = 'status-box error';
+            statusBox.innerHTML = `❌ 版權頁比對失敗: ${err.message || err}`;
+          })
+          .analyzeSingleCipPhoto(base64Data, mimeType);
+      });
+    });
+
+    // ==================== 🌟 手動微調搜尋彈窗邏輯 ====================
+    function openSearchModal(index) {
+      activeCardIndex = index;
+      const currentTitle = document.getElementById(`title_${index}`).innerText;
+      document.getElementById('modalSearchInput').value = currentTitle;
+      document.getElementById('modalSearchResult').innerHTML = '<p style="padding:10px; color:#64748b; font-size:0.85rem;">點擊上方「搜尋」開始比對...</p>';
+      document.getElementById('searchModal').style.display = 'flex';
+      executeModalSearch();
+    }
+
+    function closeSearchModal() {
+      document.getElementById('searchModal').style.display = 'none';
+      activeCardIndex = null;
+    }
+
+    function executeModalSearch() {
+      const kw = document.getElementById('modalSearchInput').value.trim();
+      const resultBox = document.getElementById('modalSearchResult');
+      if (!kw) return;
+
+      resultBox.innerHTML = '<p style="padding:10px; color:#0284c7; font-size:0.85rem;">⏳ 搜尋主檔中...</p>';
+
+      google.script.run
+        .withSuccessHandler(res => {
+          if (!res.success || !res.candidates || res.candidates.length === 0) {
+            resultBox.innerHTML = '<p style="padding:10px; color:#dc2626; font-size:0.85rem;">❌ 查無相符物資，請換關鍵字試試。</p>';
+            return;
+          }
+
+          resultBox.innerHTML = '';
+          res.candidates.forEach(cand => {
+            const itemDiv = document.createElement('div');
+            itemDiv.className = 'search-result-item';
+            
+            const thumbSrc = cand.imageUrl || '';
+            const imgHtml = thumbSrc 
+              ? `<img src="${thumbSrc}" style="width:36px; height:48px; object-fit:cover; border-radius:4px;">`
+              : `<div style="width:36px; height:48px; background:#f1f5f9; display:flex; align-items:center; justify-content:center; font-size:1rem; border-radius:4px;">📖</div>`;
+
+            itemDiv.innerHTML = `
+              ${imgHtml}
+              <div style="flex:1;">
+                <div style="font-weight:bold; font-size:0.88rem; color:#0f172a;">${cand.itemName}</div>
+                <div style="font-size:0.75rem; color:#64748b;">${cand.author ? cand.author + ' ｜ ' : ''}${cand.skuId}</div>
+              </div>
+              <button class="tool-btn blue" style="font-size:0.75rem;">選取</button>
+            `;
+
+            itemDiv.onclick = () => {
+              onCandidateChange(activeCardIndex, cand.skuId, cand.itemName, cand.imageUrl);
+              const notice = document.getElementById(`unmatchedNotice_${activeCardIndex}`);
+              if (notice) notice.style.display = 'none';
+              closeSearchModal();
+            };
+
+            resultBox.appendChild(itemDiv);
+          });
+        })
+        .withFailureHandler(err => {
+          resultBox.innerHTML = `<p style="padding:10px; color:#dc2626; font-size:0.85rem;">連線錯誤: ${err.message}</p>`;
+        })
+        .searchSkuCandidates(kw);
     }
 
     function toggleItemCheck(index) {
@@ -698,7 +900,8 @@
       let count = 0;
       recognizedItemList.forEach((_, idx) => {
         const chk = document.getElementById(`chk_${idx}`);
-        if (chk && chk.checked) count++;
+        const sku = document.getElementById(`selectedSkuId_${idx}`);
+        if (chk && chk.checked && sku && sku.value) count++;
       });
       const submitBtn = document.getElementById('batchSubmitBtn');
       submitBtn.innerText = `💾 確認並寫入庫存 (共 ${count} 件)`;

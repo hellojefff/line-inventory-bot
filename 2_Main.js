@@ -13,17 +13,14 @@ function doPost(e) {
     if (events && events.length > 0) {
       const event = events[0];
       
-      // 攔截無效測試 ReplyToken
       if (event.replyToken === "00000000000000000000000000000000" || event.replyToken === "ffffffffffffffffffffffffffffffff") {
         return HtmlService.createHtmlOutput("OK");
       }
 
-      // 攔截 LINE Webhook 重複傳送
       if (event.deliveryContext && event.deliveryContext.isRedelivery === true) {
         return HtmlService.createHtmlOutput("OK");
       }
 
-      // 訊息去重防護 (TTL: 60s)
       if (event.message && event.message.id) {
         const cache = CacheService.getUserCache();
         const msgKey = "PROCESSED_MSG_" + event.message.id;
@@ -35,7 +32,6 @@ function doPost(e) {
 
       writeDebugLog(e.postData.contents);
 
-      // 僅處理文字訊息指令
       if (event.type === 'message' && event.message && event.message.type === 'text') {
         handleLineMessage(event);
       }
@@ -81,8 +77,106 @@ function getCategoriesForFrontend() {
 }
 
 /**
- * 網頁【零庫存建檔模式】：接收「封面 + 版權頁」雙照片，並調用 Gemini 跨圖比對
+ * 🌟 前端專用：微調即時搜尋 SKU 主檔
  */
+function searchSkuCandidates(keyword) {
+  try {
+    const matched = findSKU(keyword);
+    const candidates = matched.map(m => {
+      const rawImg = (m['封面圖片URL'] || m['圖片網址'] || m['內頁圖片URL'] || m['版權頁圖片URL'] || '').toString().trim();
+      let thumbUrl = rawImg;
+      if (rawImg.includes("drive.google.com")) {
+        const match = rawImg.match(/id=([a-zA-Z0-9_-]+)/) || rawImg.match(/\/d\/([a-zA-Z0-9_-]+)/);
+        if (match && match[1]) thumbUrl = `https://lh3.googleusercontent.com/d/${match[1]}=w200`;
+      }
+      return {
+        skuId: (m['品項編號'] || m['sku_id'] || '').toString(),
+        itemName: (m['物品名稱'] || m['品名'] || '').toString(),
+        author: (m['規格或作者'] || m['規格/作者'] || m['作者'] || '').toString(),
+        category: (m['大類名稱'] || m['大類'] || '').toString(),
+        barcode: (m['條碼編號'] || m['ISBN/條碼'] || '').toString(),
+        imageUrl: thumbUrl
+      };
+    });
+    return { success: true, candidates: candidates };
+  } catch (err) {
+    return { success: false, message: err.message, candidates: [] };
+  }
+}
+
+/**
+ * 🌟 前端專用：單書補拍版權頁 (CIP) / 條碼解析
+ */
+function analyzeSingleCipPhoto(base64Data, mimeType) {
+  try {
+    if (!CONFIG.GEMINI_API_KEY) throw new Error("未設定 GEMINI_API_KEY");
+
+    const prompt = `你是一個專業圖書編目專家。請仔細辨識這張書籍【版權頁 / 內頁 CIP 預行編目資料 / 封底條碼】照片：
+1. 提取最標準權威的正題名/書名。
+2. 提取著譯者姓名。
+3. 提取純數字 ISBN 或條碼數字。
+請只回傳標準 JSON：
+{"itemName": "完整書名", "author": "作者姓名", "barcode": "純數字ISBN"}`;
+
+    const payload = {
+      contents: [{
+        parts: [
+          { text: prompt },
+          { inlineData: { mimeType: mimeType || "image/jpeg", data: base64Data } }
+        ]
+      }],
+      generationConfig: { responseMimeType: "application/json" }
+    };
+
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
+    const response = UrlFetchApp.fetch(endpoint, {
+      method: "post",
+      contentType: "application/json",
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true
+    });
+
+    let aiResult = { itemName: "", author: "", barcode: "" };
+    if (response.getResponseCode() === 200) {
+      const resJson = JSON.parse(response.getContentText());
+      if (resJson.candidates && resJson.candidates[0].content && resJson.candidates[0].content.parts[0].text) {
+        let raw = resJson.candidates[0].content.parts[0].text;
+        raw = raw.replace(/```json/gi, '').replace(/```/g, '').trim();
+        aiResult = JSON.parse(raw);
+      }
+    }
+
+    const matched = findSKU(aiResult.itemName, aiResult.barcode, aiResult.author);
+    const candidates = matched.map(m => {
+      const rawImg = (m['封面圖片URL'] || m['圖片網址'] || m['內頁圖片URL'] || m['版權頁圖片URL'] || '').toString().trim();
+      let thumbUrl = rawImg;
+      if (rawImg.includes("drive.google.com")) {
+        const match = rawImg.match(/id=([a-zA-Z0-9_-]+)/) || rawImg.match(/\/d\/([a-zA-Z0-9_-]+)/);
+        if (match && match[1]) thumbUrl = `https://lh3.googleusercontent.com/d/${match[1]}=w200`;
+      }
+      return {
+        skuId: (m['品項編號'] || m['sku_id'] || '').toString(),
+        itemName: (m['物品名稱'] || m['品名'] || '').toString(),
+        author: (m['規格或作者'] || m['規格/作者'] || m['作者'] || '').toString(),
+        category: (m['大類名稱'] || m['大類'] || '').toString(),
+        barcode: (m['條碼編號'] || m['ISBN/條碼'] || '').toString(),
+        imageUrl: thumbUrl
+      };
+    });
+
+    return {
+      success: true,
+      itemName: aiResult.itemName || "",
+      author: aiResult.author || "",
+      barcode: aiResult.barcode || "",
+      candidates: candidates
+    };
+  } catch (err) {
+    writeDebugLog("analyzeSingleCipPhoto 錯誤: " + err.message);
+    return { success: false, message: err.message, candidates: [] };
+  }
+}
+
 function uploadAndAnalyzeDualImages(coverBase64, innerBase64, mimeType) {
   try {
     if (!CONFIG.INBOUND_IMG_FOLDER_ID) {
@@ -189,9 +283,6 @@ function uploadAndAnalyzeImage(base64Data, mimeType) {
   return uploadAndAnalyzeDualImages(base64Data, null, mimeType);
 }
 
-/**
- * 網頁【拍照盤點模式】：多物資識別與庫存主檔自動匹配
- */
 function analyzeStocktakePhoto(base64Data, mimeType) {
   try {
     if (!CONFIG.GEMINI_API_KEY) {
@@ -203,7 +294,8 @@ function analyzeStocktakePhoto(base64Data, mimeType) {
     const results = recognizedList.map(item => {
       const keyword = item.itemName || "";
       const barcode = item.barcode || "";
-      const matched = (keyword || barcode) ? findSKU(keyword, barcode) : [];
+      const author = item.author || "";
+      const matched = (keyword || barcode || author) ? findSKU(keyword, barcode, author) : [];
 
       const candidates = matched.map(m => {
         const rawImg = (m['封面圖片URL'] || m['圖片網址'] || m['內頁圖片URL'] || m['版權頁圖片URL'] || '').toString().trim();
@@ -227,7 +319,7 @@ function analyzeStocktakePhoto(base64Data, mimeType) {
 
       return {
         rawName: keyword,
-        rawAuthor: item.author || "",
+        rawAuthor: author,
         rawBarcode: barcode,
         candidates: candidates
       };
@@ -422,7 +514,6 @@ const StateHandlers = {
     ctx.session.boxName = selectedBoxStr;
     SessionManager.save(ctx.lineUid, ctx.session);
     const shelfItems = shelves.map(s => ({ title: `📍 ${s.name}`, desc: `格位：${s.short_code}`, value: s.cell_code }));
-    // 🌟 修正處：改為 ctx.session.zoneName，排除變數未定義錯誤
     replyFlexMenuCard(ctx.replyToken, "🚪 選擇盤點層格", `已對齊櫃體：【${selectedBoxStr}】\n請點選具體【層格】：`, shelfItems, `↩️ 返回 [${ctx.session.zoneName || "櫃位分區"}]`);
   },
 
@@ -532,7 +623,7 @@ const StateHandlers = {
     SessionManager.save(ctx.lineUid, ctx.session, 1800);
 
     const locTextQty = `${ctx.session.siteName || ""} ${ctx.session.floorName || ""} ${ctx.session.spaceName || ""} - ${ctx.session.boxName || ""} (${ctx.session.shelfName || ""})`;
-    replyCorrectionSuccessWithMonk(ctx.replyToken, ctx.userName, locTextQty, ctx.session.cellCode, ctx.session.lastItemName, newCorrectQty, ctx.session.boxName, `實清數量已更正為【${newCorrectQty} 本/套】！`);
+    replyCorrectionSuccessWithMonk(ctx.replyToken, ctx.userName, locTextQty, ctx.session.cellCode, newCorrectQty, ctx.session.boxName, `實清數量已更正為【${newCorrectQty} 本/套】！`);
   },
 
   [STATE.POST_STOCKTAKE]: function(ctx) {
@@ -549,7 +640,6 @@ function handleLineMessage(event) {
   const cachedSession = SessionManager.get(lineUid);
   const currentVolunteer = getVolunteerByLineUid(lineUid);
   
-  // 1. 未認證身分處理
   if (!currentVolunteer) {
     if (cachedSession) {
       if (cachedSession.state === STATE.BINDING_NAME) {
@@ -576,7 +666,6 @@ function handleLineMessage(event) {
   const myDept = currentVolunteer['隸屬組織/部門'] || "基本志工";
   const myTitle = currentVolunteer['職稱/身份'] || "志工";
 
-  // 2. 常規全域靜態指令
   if (userMessage === '綁定身份') {
     replyTextMessage(replyToken, `💡 溫馨提醒：\n${myName} 您好，您已完成志工身份認證！\n\n編號：[${myUserId}]\n單位：${myDept}\n職稱：${myTitle}\n\n您的權限已開通，請點選「📸 拍照入庫」或「📷 開始盤點」進行作業！🙏`);
     return;
@@ -598,12 +687,10 @@ function handleLineMessage(event) {
     return;
   }
 
-  // 3. 優先處理返回與控制指令（避免因 Session 為空而被提前攔截）
   if (userMessage.startsWith(UI.BTN_BACK_PREFIX)) {
     if (cachedSession) {
       handleGoBack(replyToken, lineUid, cachedSession, myName);
     } else {
-      // 若無 Session 則返回最上層據點選單
       startNewStocktake(replyToken, lineUid, myName);
     }
     return;
@@ -618,15 +705,12 @@ function handleLineMessage(event) {
     return;
   }
 
-  // 4. 明確輸入「開始盤點」或「更換據點」
   if (userMessage === '開始盤點' || userMessage === CMD.CHANGE_SITE) {
     startNewStocktake(replyToken, lineUid, myName);
     return;
   }
 
-  // 5. 若當前沒有 Session，但使用者輸入了文字（例如想打字搜尋品名）
   if (!cachedSession) {
-    // 嘗試以輸入內容進行 SKU 搜尋，若找得到則友善提示先定位
     const skus = findSKU(userMessage);
     if (skus.length > 0) {
       replyTextMessage(replyToken, `🔍 找到物資【${skus[0]['物品名稱']}】，但您尚未選定盤點格位。\n\n請先點擊下方選單的「📷 開始盤點」選定櫃位與層格，再進行物資盤點與入庫！🙏`);
@@ -636,7 +720,6 @@ function handleLineMessage(event) {
     return;
   }
   
-  // 6. 狀態機正常處理流程
   const handler = StateHandlers[cachedSession.state];
   if (handler) {
     handler({
@@ -653,9 +736,6 @@ function handleLineMessage(event) {
   }
 }
 
-/**
- * 輔助函式：啟動新盤點流程並展現據點卡片
- */
 function startNewStocktake(replyToken, lineUid, myName) {
   const sites = getAllSites(); 
   if (sites.length === 0) {

@@ -106,7 +106,6 @@ function appendSkuMasterRecord(data) {
       throw new Error("SKU_MASTER 缺少必要欄位 (品項編號 / 物品名稱)");
     }
 
-    // 查重比對：使用標準化字串去除標點與空格
     const normalizedTarget = normalizeTitle(cleanName);
     for (let i = 1; i < rows.length; i++) {
       const existingName = rows[i][itemNameIdx] ? normalizeTitle(rows[i][itemNameIdx].toString()) : "";
@@ -536,7 +535,7 @@ function getRawJsonString(zoneId) {
   }, false);
 }
 
-// ==================== 5. 志工身分認證與 SKU 模糊查詢 ====================
+// ==================== 5. 志工身分認證與 SKU 強化檢索 ====================
 
 function getVolunteerByLineUid(lineUid) {
   return withSpreadsheet(ss => {
@@ -632,22 +631,19 @@ function processDualBinding(replyToken, lineUid, inputName, inputPhone) {
   }
 }
 
-/**
- * 🌟 字串符號標準化函式：去除所有中英文符號與空白，只保留純字元
- */
 function normalizeTitle(str) {
   if (!str) return "";
   return str.toString()
     .toLowerCase()
-    .replace(/[\s\r\n\t]/g, "") // 去除空白換行
-    .replace(/[：:，,、。·・《》〈〉（）()\[\]【】\-_—"']/g, ""); // 去除所有常見符號
+    .replace(/[\s\r\n\t]/g, "")
+    .replace(/[：:，,、。·・《》〈〉（）()\[\]【】\-_—"']/g, "");
 }
 
 /**
- * 🌟 強化版 SKU 檢索：支援標點標準化、雙向模糊命中、ISBN條碼命中與主標題匹配
+ * 🌟 強化版 findSKU：副標題自動切分比對 + 作者加權評分
  */
-function findSKU(keyword, barcode = "") {
-  if (!keyword && !barcode) return [];
+function findSKU(keyword, barcode = "", author = "") {
+  if (!keyword && !barcode && !author) return [];
   
   return withSpreadsheet(ss => {
     const sheet = ss.getSheetByName("SKU_MASTER");
@@ -660,14 +656,18 @@ function findSKU(keyword, barcode = "") {
     const specAuthorIdx = colMap['規格或作者'] !== undefined ? colMap['規格或作者'] : colMap['規格/作者'];
     const barcodeIdx = colMap['條碼編號'] !== undefined ? colMap['條碼編號'] : colMap['ISBN/條碼']; 
 
-    const results = [];
     const rawKey = (keyword || "").toString().trim();
     const normKey = normalizeTitle(rawKey);
     const cleanBarcode = barcode ? barcode.toString().replace(/[^0-9]/g, "") : "";
+    const normAuthorInput = normalizeTitle(author);
 
-    // 擷取冒號/破折號前的主要書名（例如「大智慧到彼岸」）
-    const mainKeyParts = rawKey.split(/[:：\-_—\s]/);
-    const normMainKey = mainKeyParts.length > 0 ? normalizeTitle(mainKeyParts[0]) : "";
+    // 🌟 將輸入字串依常見分隔符（破折號、冒號、斜線）切分子詞
+    const subSegments = rawKey
+      .split(/[—–\-_:：\s/\\()（）「」『』《》〈〉]/)
+      .map(s => normalizeTitle(s))
+      .filter(s => s.length >= 3);
+
+    const scoredResults = [];
 
     for (let i = 1; i < data.length; i++) {
       const row = data[i];
@@ -679,36 +679,56 @@ function findSKU(keyword, barcode = "") {
       const normName = normalizeTitle(nameVal);
       const normAuthor = normalizeTitle(authorVal);
 
-      let isMatch = false;
+      let score = 0;
 
-      // 1. ISBN / 條碼純數字精確比對
+      // 1. ISBN / 條碼命中
       if (cleanBarcode && barcodeVal && cleanBarcode === barcodeVal) {
-        isMatch = true;
-      }
-      // 2. 品項編號比對 (如 H0000002)
-      else if (rawKey && skuVal && (skuVal.toLowerCase() === rawKey.toLowerCase() || skuVal.toLowerCase().includes(rawKey.toLowerCase()))) {
-        isMatch = true;
-      }
-      // 3. 標準化書名雙向包含比對（抹平全半形冒號、括號差別）
-      else if (normKey && normName && (normName.includes(normKey) || normKey.includes(normName))) {
-        isMatch = true;
-      }
-      // 4. 主標題命中（至少4個字以上，避免通用單字過度誤判）
-      else if (normMainKey && normMainKey.length >= 4 && normName && (normName.includes(normMainKey) || normMainKey.includes(normName))) {
-        isMatch = true;
-      }
-      // 5. 作者比對 (輔助)
-      else if (normKey && normAuthor && (normAuthor.includes(normKey) || normKey.includes(normAuthor))) {
-        isMatch = true;
+        score += 100;
       }
 
-      if (isMatch) {
+      // 2. 品項編號完全命中
+      if (rawKey && skuVal && skuVal.toLowerCase() === rawKey.toLowerCase()) {
+        score += 100;
+      }
+
+      // 3. 全名標準化比對
+      if (normKey && normName) {
+        if (normKey === normName) {
+          score += 80;
+        } else if (normName.includes(normKey) || normKey.includes(normName)) {
+          score += 60;
+        }
+      }
+
+      // 4. 副標題 / 片段命中 (精準化解「法會」vs「法命」的差異)
+      if (subSegments.length > 0 && normName) {
+        for (const seg of subSegments) {
+          if (normName.includes(seg)) {
+            score += Math.min(50, seg.length * 7);
+          }
+        }
+      }
+
+      // 5. 作者加權比對
+      if (normAuthorInput && normAuthor) {
+        if (normAuthor.includes(normAuthorInput) || normAuthorInput.includes(normAuthor)) {
+          score += 30;
+        }
+      }
+
+      if (score >= 35) {
         const skuObj = {};
         data[0].forEach((header, index) => { skuObj[header] = row[index]; });
-        results.push(skuObj);
+        skuObj._matchScore = score;
+        scoredResults.push(skuObj);
       }
     }
-    return results;
+
+    scoredResults.sort((a, b) => b._matchScore - a._matchScore);
+    return scoredResults.map(item => {
+      delete item._matchScore;
+      return item;
+    });
   }, false);
 }
 
