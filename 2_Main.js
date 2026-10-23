@@ -190,7 +190,7 @@ function uploadAndAnalyzeImage(base64Data, mimeType) {
 }
 
 /**
- * 🌟 網頁【拍照盤點模式】：多物資識別與庫存主檔自動匹配（支援帶出封面圖片）
+ * 🌟 網頁【拍照盤點模式】：多物資識別與庫存主檔自動匹配（支援標準化比對與縮圖帶出）
  */
 function analyzeStocktakePhoto(base64Data, mimeType) {
   try {
@@ -202,10 +202,11 @@ function analyzeStocktakePhoto(base64Data, mimeType) {
 
     const results = recognizedList.map(item => {
       const keyword = item.itemName || "";
-      const matched = keyword ? findSKU(keyword) : [];
+      const barcode = item.barcode || "";
+      // 🌟 同時帶入書名與條碼進行標準化模糊查詢
+      const matched = (keyword || barcode) ? findSKU(keyword, barcode) : [];
 
       const candidates = matched.map(m => {
-        // 優先讀取封面，若無封面則回退顯示內頁/版權頁
         const rawImg = (m['封面圖片URL'] || m['圖片網址'] || m['內頁圖片URL'] || m['版權頁圖片URL'] || '').toString().trim();
         let thumbUrl = rawImg;
         if (rawImg.includes("drive.google.com")) {
@@ -221,14 +222,14 @@ function analyzeStocktakePhoto(base64Data, mimeType) {
           author: (m['規格或作者'] || m['規格/作者'] || m['作者'] || '').toString(),
           category: (m['大類名稱'] || m['大類'] || '').toString(),
           barcode: (m['條碼編號'] || m['ISBN/條碼'] || '').toString(),
-          imageUrl: thumbUrl // 🌟 帶出封面縮圖網址
+          imageUrl: thumbUrl
         };
       });
 
       return {
         rawName: keyword,
         rawAuthor: item.author || "",
-        rawBarcode: item.barcode || "",
+        rawBarcode: barcode,
         candidates: candidates
       };
     });
@@ -284,7 +285,7 @@ function callGeminiMultiItemRecognition(base64Data, mimeType) {
           const parsed = JSON.parse(raw);
           return parsed.items || [];
         }
-      }
+      } catch (err) {}
     } catch (err) {}
   }
   return [];
@@ -531,7 +532,7 @@ const StateHandlers = {
     SessionManager.save(ctx.lineUid, ctx.session, 1800);
 
     const locTextQty = `${ctx.session.siteName || ""} ${ctx.session.floorName || ""} ${ctx.session.spaceName || ""} - ${ctx.session.boxName || ""} (${ctx.session.shelfName || ""})`;
-    replyCorrectionSuccessWithMonk(ctx.replyToken, ctx.userName, locTextQty, ctx.session.cellCode, newCorrectQty, ctx.session.boxName, `實清數量已更正為【${newCorrectQty} 本/套】！`);
+    replyCorrectionSuccessWithMonk(ctx.replyToken, ctx.userName, locTextQty, ctx.session.cellCode, ctx.session.lastItemName, newCorrectQty, ctx.session.boxName, `實清數量已更正為【${newCorrectQty} 本/套】！`);
   },
 
   [STATE.POST_STOCKTAKE]: function(ctx) {

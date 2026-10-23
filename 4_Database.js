@@ -106,10 +106,10 @@ function appendSkuMasterRecord(data) {
       throw new Error("SKU_MASTER 缺少必要欄位 (品項編號 / 物品名稱)");
     }
 
-    // 1. 查重比對：品名完全相同者直接回傳，若已有資料但缺圖則補上
-    const normalizedTarget = cleanName.replace(/\s+/g, "").toLowerCase();
+    // 查重比對：使用標準化字串去除標點與空格
+    const normalizedTarget = normalizeTitle(cleanName);
     for (let i = 1; i < rows.length; i++) {
-      const existingName = rows[i][itemNameIdx] ? rows[i][itemNameIdx].toString().replace(/\s+/g, "").toLowerCase() : "";
+      const existingName = rows[i][itemNameIdx] ? normalizeTitle(rows[i][itemNameIdx].toString()) : "";
       if (existingName === normalizedTarget) {
         if (imgIdx !== undefined && !rows[i][imgIdx] && data.imageUrl) {
           sheet.getRange(i + 1, imgIdx + 1).setValue(data.imageUrl);
@@ -125,7 +125,6 @@ function appendSkuMasterRecord(data) {
       }
     }
 
-    // 2. 計算該大類最大流水號 (格式如：H0000001)
     let maxSerial = 0;
     const prefixRegex = new RegExp(`^${categoryCode}-?(\\d+)$`, 'i');
 
@@ -144,7 +143,6 @@ function appendSkuMasterRecord(data) {
     const newSkuId = `${categoryCode}${String(nextSerial).padStart(7, '0')}`;
     const timestamp = Utilities.formatDate(new Date(), "GMT+8", "yyyy-MM-dd HH:mm:ss");
 
-    // 3. 組裝寫入列
     const newRow = new Array(rows[0].length).fill("");
     newRow[skuIdIdx] = newSkuId;
     if (cateCodeIdx !== undefined) newRow[cateCodeIdx] = categoryCode;
@@ -169,27 +167,6 @@ function appendSkuMasterRecord(data) {
   }, true);
 }
 
-function createPreStockSkuMasterWithCategory(itemName, categoryCode, categoryName, imageUrl = "", barcode = "", author = "") {
-  try {
-    const res = appendSkuMasterRecord({
-      name: itemName,
-      categoryCode: categoryCode,
-      category: categoryName,
-      imageUrl: imageUrl,
-      barcode: barcode,
-      author: author
-    });
-    return {
-      success: true,
-      skuId: res.id,
-      itemName: res.name,
-      isExisting: res.isExisting
-    };
-  } catch (err) {
-    return { success: false, message: err.message };
-  }
-}
-
 // ==================== 3. 庫存盤點與批次更新模組 ====================
 
 function executeBatchStockWorkflow(userId, cellCode, items) {
@@ -198,7 +175,6 @@ function executeBatchStockWorkflow(userId, cellCode, items) {
   }
 
   return withSpreadsheet(ss => {
-    // 1. 批次寫入日誌表 STOCKTAKE_LOG
     let logSheet = ss.getSheetByName("STOCKTAKE_LOG");
     if (!logSheet) {
       logSheet = ss.insertSheet("STOCKTAKE_LOG");
@@ -217,7 +193,6 @@ function executeBatchStockWorkflow(userId, cellCode, items) {
       logSheet.getRange(startRow + 1, 1, logRows.length, logRows[0].length).setValues(logRows);
     }
 
-    // 2. 批次更新庫存表 CURRENT_STOCK
     let stockSheet = ss.getSheetByName("CURRENT_STOCK");
     if (!stockSheet) {
       stockSheet = ss.insertSheet("CURRENT_STOCK");
@@ -561,7 +536,7 @@ function getRawJsonString(zoneId) {
   }, false);
 }
 
-// ==================== 5. 志工身分認證與 SKU 查詢 ====================
+// ==================== 5. 志工身分認證與 SKU 模糊查詢 ====================
 
 function getVolunteerByLineUid(lineUid) {
   return withSpreadsheet(ss => {
@@ -657,8 +632,23 @@ function processDualBinding(replyToken, lineUid, inputName, inputPhone) {
   }
 }
 
-function findSKU(keyword) {
-  if (!keyword) return [];
+/**
+ * 🌟 字串符號標準化函式：去除所有中英文符號與空白，只保留純字元
+ */
+function normalizeTitle(str) {
+  if (!str) return "";
+  return str.toString()
+    .toLowerCase()
+    .replace(/[\s\r\n\t]/g, "") // 去除空白換行
+    .replace(/[：:，,、。·・《》〈〉（）()\[\]【】\-_—"']/g, ""); // 去除所有常見符號
+}
+
+/**
+ * 🌟 強化版 SKU 檢索：支援標點標準化、雙向模糊命中、ISBN條碼命中與主標題匹配
+ */
+function findSKU(keyword, barcode = "") {
+  if (!keyword && !barcode) return [];
+  
   return withSpreadsheet(ss => {
     const sheet = ss.getSheetByName("SKU_MASTER");
     if (!sheet) return [];
@@ -671,19 +661,48 @@ function findSKU(keyword) {
     const barcodeIdx = colMap['條碼編號'] !== undefined ? colMap['條碼編號'] : colMap['ISBN/條碼']; 
 
     const results = [];
-    const searchStr = keyword.toString().toLowerCase().trim();
+    const rawKey = (keyword || "").toString().trim();
+    const normKey = normalizeTitle(rawKey);
+    const cleanBarcode = barcode ? barcode.toString().replace(/[^0-9]/g, "") : "";
+
+    // 擷取冒號/破折號前的主要書名（例如「大智慧到彼岸」）
+    const mainKeyParts = rawKey.split(/[:：\-_—\s]/);
+    const normMainKey = mainKeyParts.length > 0 ? normalizeTitle(mainKeyParts[0]) : "";
 
     for (let i = 1; i < data.length; i++) {
       const row = data[i];
-      const skuVal = row[skuIdIdx] ? row[skuIdIdx].toString().toLowerCase() : "";
-      const nameVal = row[itemNameIdx] ? row[itemNameIdx].toString().toLowerCase() : "";
-      const authorVal = (specAuthorIdx !== undefined && row[specAuthorIdx]) ? row[specAuthorIdx].toString().toLowerCase() : "";
-      const barcodeVal = (barcodeIdx !== undefined && row[barcodeIdx]) ? row[barcodeIdx].toString().toLowerCase() : "";
+      const skuVal = row[skuIdIdx] ? row[skuIdIdx].toString().trim() : "";
+      const nameVal = row[itemNameIdx] ? row[itemNameIdx].toString().trim() : "";
+      const authorVal = (specAuthorIdx !== undefined && row[specAuthorIdx]) ? row[specAuthorIdx].toString().trim() : "";
+      const barcodeVal = (barcodeIdx !== undefined && row[barcodeIdx]) ? row[barcodeIdx].toString().replace(/[^0-9]/g, "") : "";
 
-      if (skuVal.includes(searchStr) ||
-          nameVal.includes(searchStr) ||
-          authorVal.includes(searchStr) ||
-          barcodeVal === searchStr) {
+      const normName = normalizeTitle(nameVal);
+      const normAuthor = normalizeTitle(authorVal);
+
+      let isMatch = false;
+
+      // 1. ISBN / 條碼純數字精確比對
+      if (cleanBarcode && barcodeVal && cleanBarcode === barcodeVal) {
+        isMatch = true;
+      }
+      // 2. 品項編號比對 (如 H0000002)
+      else if (rawKey && skuVal && (skuVal.toLowerCase() === rawKey.toLowerCase() || skuVal.toLowerCase().includes(rawKey.toLowerCase()))) {
+        isMatch = true;
+      }
+      // 3. 標準化書名雙向包含比對（抹平全半形冒號、括號差別）
+      else if (normKey && normName && (normName.includes(normKey) || normKey.includes(normName))) {
+        isMatch = true;
+      }
+      // 4. 主標題命中（至少4個字以上，避免通用單字過度誤判）
+      else if (normMainKey && normMainKey.length >= 4 && normName && (normName.includes(normMainKey) || normMainKey.includes(normName))) {
+        isMatch = true;
+      }
+      // 5. 作者比對 (輔助)
+      else if (normKey && normAuthor && (normAuthor.includes(normKey) || normKey.includes(normAuthor))) {
+        isMatch = true;
+      }
+
+      if (isMatch) {
         const skuObj = {};
         data[0].forEach((header, index) => { skuObj[header] = row[index]; });
         results.push(skuObj);
