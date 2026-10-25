@@ -783,3 +783,129 @@ function writeDebugLog(contents) {
     debugSheet.appendRow([new Date(), contents]);
   } catch(e) {}
 }
+
+/**
+ * 一次性批次工具：從既有內頁/版權頁圖片中，自動提取並補齊「出版社、版次與年份、定價」
+ */
+function backfillBookMetadataFromImages() {
+  const ss = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
+  const sheet = ss.getSheetByName("SKU_MASTER");
+  if (!sheet) return;
+
+  const data = sheet.getDataRange().getValues();
+  const colMap = getSheetColumnIndexes(data[0]);
+
+  const skuIdx = colMap['品項編號'];
+  const nameIdx = colMap['物品名稱'];
+  const coverIdx = colMap['封面圖片URL'] !== undefined ? colMap['封面圖片URL'] : colMap['圖片網址'];
+  const innerIdx = colMap['內頁圖片URL'] !== undefined ? colMap['內頁圖片URL'] : colMap['版權頁圖片URL'];
+
+  const publisherIdx = colMap['出版社'];
+  const editionIdx = colMap['版次與年份'];
+  const priceIdx = colMap['定價'];
+
+  if (publisherIdx === undefined || editionIdx === undefined || priceIdx === undefined) {
+    Logger.log("❌ SKU_MASTER 缺少 出版社/版次與年份/定價 欄位");
+    return;
+  }
+
+  let updatedCount = 0;
+
+  for (let i = 1; i < data.length; i++) {
+    const skuId = data[i][skuIdx];
+    const name = data[i][nameIdx];
+    const hasPublisher = !!data[i][publisherIdx];
+    const hasEdition = !!data[i][editionIdx];
+    const hasPrice = !!data[i][priceIdx];
+
+    // 如果三欄都已經填妥，直接跳過
+    if (hasPublisher && hasEdition && hasPrice) continue;
+
+    // 優先使用「內頁圖片URL」，若無則嘗試「封面圖片URL」
+    const targetImgUrl = (innerIdx !== undefined && data[i][innerIdx]) 
+      ? data[i][innerIdx].toString().trim() 
+      : (coverIdx !== undefined && data[i][coverIdx] ? data[i][coverIdx].toString().trim() : "");
+
+    if (!targetImgUrl) continue;
+
+    const match = targetImgUrl.match(/id=([a-zA-Z0-9_-]+)/) || targetImgUrl.match(/\/d\/([a-zA-Z0-9_-]+)/);
+    if (!match) continue;
+
+    try {
+      const fileId = match[1];
+      const file = DriveApp.getFileById(fileId);
+      const blob = file.getBlob();
+      const base64Data = Utilities.base64Encode(blob.getBytes());
+      const mimeType = blob.getContentType();
+
+      // 調用 Gemini 專門解析這 3 個欄位
+      const meta = extractMetaFromCipImage(base64Data, mimeType);
+
+      let isUpdated = false;
+      if (!hasPublisher && meta.publisher) {
+        sheet.getRange(i + 1, publisherIdx + 1).setValue(meta.publisher);
+        isUpdated = true;
+      }
+      if (!hasEdition && meta.edition) {
+        sheet.getRange(i + 1, editionIdx + 1).setValue(meta.edition);
+        isUpdated = true;
+      }
+      if (!hasPrice && meta.price) {
+        sheet.getRange(i + 1, priceIdx + 1).setValue(meta.price);
+        isUpdated = true;
+      }
+
+      if (isUpdated) {
+        Logger.log(`[成功補齊] 行 ${i + 1}: ${name} (${skuId}) ➔ 出版社: ${meta.publisher || '無'} | 版次: ${meta.edition || '無'} | 定價: ${meta.price || '無'}`);
+        updatedCount++;
+      }
+
+      Utilities.sleep(600); // 避免觸發 API 頻率限制
+    } catch (err) {
+      Logger.log(`處理第 ${i + 1} 行 (${name}) 錯誤: ${err.message}`);
+    }
+  }
+
+  Logger.log(`補齊作業完成！共更新 ${updatedCount} 筆既有書籍資訊。`);
+}
+
+/**
+ * 輔助函式：調用 Gemini 提取出版社、版次、定價
+ */
+function extractMetaFromCipImage(base64Data, mimeType) {
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
+  const prompt = `請觀察這張書籍版權頁（CIP）或封底照片，擷取以下三個資訊：
+1. 出版社（出版者或發行機構名稱，例如「藝術家出版社」）。
+2. 版次與年份（版次與印刷出版年月，例如「2014年3月 二版」或「2003年 初版」）。
+3. 定價（新台幣定價數字，例如「380」）。
+若照片中完全找不到某個欄位，請填入空字串。
+只回傳標準 JSON 格式：
+{"publisher": "出版社名稱", "edition": "版次與年份", "price": "定價"}`;
+
+  const payload = {
+    contents: [{
+      parts: [
+        { text: prompt },
+        { inlineData: { mimeType: mimeType || "image/jpeg", data: base64Data } }
+      ]
+    }],
+    generationConfig: { responseMimeType: "application/json" }
+  };
+
+  const response = UrlFetchApp.fetch(endpoint, {
+    method: "post",
+    contentType: "application/json",
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true
+  });
+
+  if (response.getResponseCode() === 200) {
+    const resJson = JSON.parse(response.getContentText());
+    if (resJson.candidates && resJson.candidates[0].content && resJson.candidates[0].content.parts[0].text) {
+      let raw = resJson.candidates[0].content.parts[0].text;
+      raw = raw.replace(/```json/gi, '').replace(/```/g, '').trim();
+      return JSON.parse(raw);
+    }
+  }
+  return { publisher: "", edition: "", price: "" };
+}
