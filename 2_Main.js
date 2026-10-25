@@ -76,9 +76,6 @@ function getCategoriesForFrontend() {
   return getCategoryList();
 }
 
-/**
- * 🌟 前端專用：微調即時搜尋 SKU 主檔
- */
 function searchSkuCandidates(keyword) {
   try {
     const matched = findSKU(keyword);
@@ -104,9 +101,6 @@ function searchSkuCandidates(keyword) {
   }
 }
 
-/**
- * 🌟 前端專用：單書補拍版權頁 (CIP) / 條碼解析
- */
 function analyzeSingleCipPhoto(base64Data, mimeType) {
   try {
     if (!CONFIG.GEMINI_API_KEY) throw new Error("未設定 GEMINI_API_KEY");
@@ -177,6 +171,9 @@ function analyzeSingleCipPhoto(base64Data, mimeType) {
   }
 }
 
+/**
+ * 🌟 網頁【零庫存建檔模式】：接收雙照片，提取書名、作者、ISBN、出版社、版次、定價
+ */
 function uploadAndAnalyzeDualImages(coverBase64, innerBase64, mimeType) {
   try {
     if (!CONFIG.INBOUND_IMG_FOLDER_ID) {
@@ -200,7 +197,7 @@ function uploadAndAnalyzeDualImages(coverBase64, innerBase64, mimeType) {
       innerUrl = `https://drive.google.com/uc?id=${innerFile.getId()}`;
     }
 
-    let aiResult = { itemName: "", author: "", barcode: "", category: "出版品與佛藝書籍" };
+    let aiResult = { itemName: "", author: "", barcode: "", category: "出版品與佛藝書籍", publisher: "", edition: "", price: "" };
     try {
       aiResult = callGeminiDualImageRecognition(coverBase64, innerBase64, mimeType);
     } catch (aiErr) {
@@ -214,7 +211,10 @@ function uploadAndAnalyzeDualImages(coverBase64, innerBase64, mimeType) {
       recognizedName: aiResult.itemName || "",
       author: aiResult.author || "",
       barcode: aiResult.barcode || "",
-      category: aiResult.category || "出版品與佛藝書籍"
+      category: aiResult.category || "出版品與佛藝書籍",
+      publisher: aiResult.publisher || "",
+      edition: aiResult.edition || "",
+      price: aiResult.price || ""
     };
   } catch (err) {
     writeDebugLog("uploadAndAnalyzeDualImages 錯誤: " + err.message);
@@ -224,23 +224,26 @@ function uploadAndAnalyzeDualImages(coverBase64, innerBase64, mimeType) {
 
 function callGeminiDualImageRecognition(coverBase64, innerBase64, mimeType) {
   if (!CONFIG.GEMINI_API_KEY) {
-    return { itemName: "", author: "", barcode: "", category: "出版品與佛藝書籍" };
+    return { itemName: "", author: "", barcode: "", category: "出版品與佛藝書籍", publisher: "", edition: "", price: "" };
   }
 
   const candidateModels = ["gemini-flash-lite-latest", "gemini-3.5-flash-lite", "gemini-3.8-flash"];
 
   const prompt = `你是一個專業圖書編目專家。使用者提供了這本書的影像資料：
 ${coverBase64 ? '- 第一張影像：書籍【封面】（有題名設計、視覺字體或裝幀外觀）。' : ''}
-${innerBase64 ? '- 第二張影像：書籍【版權頁 / 內頁 CIP 國家圖書館預行編目資料】（具有最標準權威的正題名、著譯者與 ISBN 編號）。' : ''}
+${innerBase64 ? '- 第二張影像：書籍【版權頁 / 內頁 CIP 國家圖書館預行編目資料】（具有最標準權威的正題名、著譯者、ISBN 編號、出版社、版次與定價）。' : ''}
 
 【提取準則】：
-1. 【物品名稱/書名】：優先以【版權頁/CIP】所標記的正式出版品書名為準。
-2. 【作者/著者】：優先以版權頁/CIP所載之著者、譯者或註述者姓名為主。
-3. 【ISBN或條碼】：請從版權頁的 ISBN 欄位提取純數字條碼（去除連字號）。
+1. 【物品名稱/書名】：優先以【版權頁/CIP】所標記的正式出版品書名為準（若有分卷號如「1：山海傳奇」，請整合至正題名）。
+2. 【作者/著者】：優先以版權頁/CIP所載之著者、譯者或註述者姓名為主（例如「蕭瓊瑞」）。
+3. 【ISBN或條碼】：請從版權頁的 ISBN 欄位提取純數字條碼（去除連字號與括號說明）。
 4. 【大類名稱】：推論所屬大類（出版品與佛藝書籍、宗教與儀式物品、專業影音廣播、辦公與生活家電、消耗品與雜項）。
+5. 【出版社】：版權頁或CIP所記載之出版者或發行機構名稱（例如「藝術家出版社」）。
+6. 【版次與年份】：版權頁記載之最新版次與印刷年份（例如「2014年3月 二版」或「2003年 初版」）。
+7. 【定價】：版權頁標示之定價數字（例如「380」）。
 
 請務必只回傳標準 JSON 字串：
-{"itemName": "完整書名", "author": "作者姓名", "barcode": "純數字ISBN", "category": "大類名稱"}`;
+{"itemName": "完整書名", "author": "作者姓名", "barcode": "純數字ISBN", "category": "大類名稱", "publisher": "出版社名稱", "edition": "版次與年份", "price": "定價"}`;
 
   const parts = [{ text: prompt }];
 
@@ -276,7 +279,7 @@ ${innerBase64 ? '- 第二張影像：書籍【版權頁 / 內頁 CIP 國家圖�
     } catch (err) {}
   }
 
-  return { itemName: "", author: "", barcode: "", category: "出版品與佛藝書籍" };
+  return { itemName: "", author: "", barcode: "", category: "出版品與佛藝書籍", publisher: "", edition: "", price: "" };
 }
 
 function uploadAndAnalyzeImage(base64Data, mimeType) {
@@ -399,10 +402,13 @@ function createSkuMasterItem(data) {
       category: data.category,
       barcode: data.barcode || "",
       imageUrl: data.imageUrl || "",
-      innerImageUrl: data.innerImageUrl || ""
+      innerImageUrl: data.innerImageUrl || "",
+      publisher: data.publisher || "",
+      edition: data.edition || "",
+      price: data.price || ""
     });
 
-    const statusNote = newSku.isExisting ? "（已存在物資，已更新圖片）" : "（新建物資）";
+    const statusNote = newSku.isExisting ? "（已存在物資，已更新詳細資料）" : "（新建物資）";
     return { 
       success: true, 
       skuId: newSku.id, 

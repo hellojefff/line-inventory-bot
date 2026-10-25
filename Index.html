@@ -130,7 +130,6 @@
     .status-box.success { display: block; background: #dcfce7; color: #15803d; border: 1px solid #bbf7d0; }
     .status-box.error { display: block; background: #fee2e2; color: #b91c1c; border: 1px solid #fecaca; }
 
-    /* 批次盤點卡片樣式 */
     .item-card {
       background: #ffffff;
       border: 1.5px solid #cbd5e1;
@@ -180,7 +179,6 @@
       margin-top: 3px;
     }
 
-    /* 🌟 卡片快捷輔助按鈕工具列 */
     .card-tools {
       display: flex;
       gap: 6px;
@@ -199,9 +197,7 @@
       gap: 4px;
       font-weight: 500;
     }
-    .tool-btn:hover {
-      background: #e2e8f0;
-    }
+    .tool-btn:hover { background: #e2e8f0; }
     .tool-btn.blue {
       border-color: #93c5fd;
       color: #0284c7;
@@ -314,7 +310,6 @@
       outline: none;
     }
 
-    /* 🌟 微調搜尋互動彈窗 */
     .modal-overlay {
       display: none;
       position: fixed;
@@ -348,9 +343,7 @@
       border-bottom: 1px solid #f1f5f9;
       cursor: pointer;
     }
-    .search-result-item:hover {
-      background: #f0fdf4;
-    }
+    .search-result-item:hover { background: #f0fdf4; }
   </style>
 </head>
 <body>
@@ -371,8 +364,6 @@
     <div id="stocktakeSection" style="display:none;">
       <label class="camera-trigger" for="cameraStocktakeFile">📷 開啟相機 拍攝架上物資</label>
       <input type="file" id="cameraStocktakeFile" style="display:none;" accept="image/*" capture="environment">
-
-      <!-- 專屬單書補拍版權頁相機 -->
       <input type="file" id="cameraSingleCipFile" style="display:none;" accept="image/*" capture="environment">
 
       <div id="itemsContainer"></div>
@@ -394,7 +385,7 @@
         <label class="photo-slot" id="slotInner" for="cameraInnerFile">
           <div class="photo-slot-icon">📖</div>
           <div class="photo-slot-title">2. 拍版權頁 (選填)</div>
-          <div class="photo-slot-sub">解析 CIP 標準書名</div>
+          <div class="photo-slot-sub">解析 CIP 標準書名與出版社</div>
           <img id="previewInner" class="slot-preview" alt="版權頁預覽">
         </label>
         <input type="file" id="cameraInnerFile" style="display:none;" accept="image/*" capture="environment">
@@ -411,6 +402,21 @@
         <label class="field-lbl" for="itemAuthor">作者 / 著者：</label>
         <input type="text" id="itemAuthor" placeholder="作者姓名">
 
+        <!-- 🌟 出版社與定價並排 -->
+        <div style="display: flex; gap: 8px;">
+          <div style="flex: 1.3;">
+            <label class="field-lbl" for="itemPublisher">出版社：</label>
+            <input type="text" id="itemPublisher" placeholder="例：藝術家出版社">
+          </div>
+          <div style="flex: 0.7;">
+            <label class="field-lbl" for="itemPrice">定價：</label>
+            <input type="text" id="itemPrice" placeholder="例：380">
+          </div>
+        </div>
+
+        <label class="field-lbl" for="itemEdition">版次與年份：</label>
+        <input type="text" id="itemEdition" placeholder="例：2014年3月 二版">
+
         <label class="field-lbl" for="categorySelect">物資大類：</label>
         <select id="categorySelect"><option value="">載入中...</option></select>
 
@@ -425,7 +431,6 @@
     </div>
   </div>
 
-  <!-- 🌟 微調搜尋 Modal 視窗 -->
   <div id="searchModal" class="modal-overlay">
     <div class="modal-box">
       <h3 style="font-size:1.1rem; margin-bottom:8px;">🔍 手動微調搜尋主檔</h3>
@@ -473,7 +478,6 @@
       }
     });
 
-    // ==================== 建檔模式事件處理 ====================
     document.getElementById('cameraCoverFile').addEventListener('change', function(e) {
       const file = e.target.files[0];
       if (!file) return;
@@ -530,6 +534,11 @@
             document.getElementById('barcode').value = res.barcode || '';
             document.getElementById('uploadedCoverUrl').value = res.imageUrl || '';
             document.getElementById('uploadedInnerUrl').value = res.innerImageUrl || '';
+            
+            // 🌟 自動填入 CIP 解析出的新欄位
+            document.getElementById('itemPublisher').value = res.publisher || '';
+            document.getElementById('itemEdition').value = res.edition || '';
+            document.getElementById('itemPrice').value = res.price || '';
 
             if (res.category) {
               const sel = document.getElementById('categorySelect');
@@ -559,6 +568,10 @@
       const barcode = document.getElementById('barcode').value.trim();
       const coverUrl = document.getElementById('uploadedCoverUrl').value;
       const innerUrl = document.getElementById('uploadedInnerUrl').value;
+      
+      const publisher = document.getElementById('itemPublisher').value.trim();
+      const edition = document.getElementById('itemEdition').value.trim();
+      const price = document.getElementById('itemPrice').value.trim();
 
       if (!name) return alert("請輸入品名！");
       if (!cat) return alert("請選擇大類！");
@@ -580,6 +593,9 @@
             document.getElementById('barcode').value = '';
             document.getElementById('uploadedCoverUrl').value = '';
             document.getElementById('uploadedInnerUrl').value = '';
+            document.getElementById('itemPublisher').value = '';
+            document.getElementById('itemEdition').value = '';
+            document.getElementById('itemPrice').value = '';
             document.getElementById('previewCover').style.display = 'none';
             document.getElementById('previewInner').style.display = 'none';
             document.getElementById('slotCover').classList.remove('active');
@@ -604,7 +620,10 @@
           category: cat,
           barcode: barcode,
           imageUrl: coverUrl,
-          innerImageUrl: innerUrl
+          innerImageUrl: innerUrl,
+          publisher: publisher,
+          edition: edition,
+          price: price
         });
     }
 
@@ -707,7 +726,6 @@
               <div class="item-title" id="title_${index}">${mainTitle}</div>
               <div class="item-sub">${mainAuthor ? '✍️ ' + mainAuthor : ''} <span id="skuBadge_${index}" style="color:#0284c7; font-weight:bold;">${defaultSkuId ? '[' + defaultSkuId + ']' : ''}</span></div>
               
-              <!-- 🌟 專屬微調與補拍快捷按鈕列 -->
               <div class="card-tools">
                 <button type="button" class="tool-btn" onclick="openSearchModal(${index})">🔍 微調搜尋</button>
                 <button type="button" class="tool-btn blue" onclick="triggerSingleCip(${index})">📖 補拍版權頁</button>
@@ -766,7 +784,6 @@
       }
     }
 
-    // ==================== 🌟 專屬補拍版權頁邏輯 ====================
     function triggerSingleCip(index) {
       activeCardIndex = index;
       document.getElementById('cameraSingleCipFile').click();
@@ -808,7 +825,6 @@
       });
     });
 
-    // ==================== 🌟 手動微調搜尋彈窗邏輯 ====================
     function openSearchModal(index) {
       activeCardIndex = index;
       const currentTitle = document.getElementById(`title_${index}`).innerText;

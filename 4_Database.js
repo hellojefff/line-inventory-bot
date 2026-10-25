@@ -98,6 +98,12 @@ function appendSkuMasterRecord(data) {
     const barcodeIdx = colMap['條碼編號'] !== undefined ? colMap['條碼編號'] : colMap['ISBN/條碼'];
     const imgIdx = colMap['封面圖片URL'] !== undefined ? colMap['封面圖片URL'] : colMap['圖片網址'];
     const innerImgIdx = colMap['內頁圖片URL'] !== undefined ? colMap['內頁圖片URL'] : colMap['版權頁圖片URL'];
+    
+    // 🌟 圖書延伸通用欄位
+    const publisherIdx = colMap['出版社'];
+    const editionIdx = colMap['版次與年份'];
+    const priceIdx = colMap['定價'];
+
     const sourceIdx = colMap['建檔來源'];
     const creatorIdx = colMap['建立人員'];
     const timeIdx = colMap['建立時間'];
@@ -106,24 +112,51 @@ function appendSkuMasterRecord(data) {
       throw new Error("SKU_MASTER 缺少必要欄位 (品項編號 / 物品名稱)");
     }
 
+    // 1. 強化查重防呆（ISBN 優先，去標點書名次之）
     const normalizedTarget = normalizeTitle(cleanName);
+    const cleanTargetBarcode = data.barcode ? data.barcode.toString().replace(/[^0-9]/g, "") : "";
+
     for (let i = 1; i < rows.length; i++) {
-      const existingName = rows[i][itemNameIdx] ? normalizeTitle(rows[i][itemNameIdx].toString()) : "";
-      if (existingName === normalizedTarget) {
+      const existingSkuId = rows[i][skuIdIdx] ? rows[i][skuIdIdx].toString().trim() : "";
+      const existingName = rows[i][itemNameIdx] ? rows[i][itemNameIdx].toString().trim() : "";
+      const existingBarcode = (barcodeIdx !== undefined && rows[i][barcodeIdx]) 
+        ? rows[i][barcodeIdx].toString().replace(/[^0-9]/g, "") 
+        : "";
+
+      let isDuplicate = false;
+      if (cleanTargetBarcode && existingBarcode && cleanTargetBarcode === existingBarcode) {
+        isDuplicate = true;
+      } else if (normalizedTarget && normalizeTitle(existingName) === normalizedTarget) {
+        isDuplicate = true;
+      }
+
+      if (isDuplicate) {
+        // 現有資料若有缺圖或缺 CIP 資料，自動補齊
         if (imgIdx !== undefined && !rows[i][imgIdx] && data.imageUrl) {
           sheet.getRange(i + 1, imgIdx + 1).setValue(data.imageUrl);
         }
         if (innerImgIdx !== undefined && !rows[i][innerImgIdx] && data.innerImageUrl) {
           sheet.getRange(i + 1, innerImgIdx + 1).setValue(data.innerImageUrl);
         }
+        if (publisherIdx !== undefined && !rows[i][publisherIdx] && data.publisher) {
+          sheet.getRange(i + 1, publisherIdx + 1).setValue(data.publisher);
+        }
+        if (editionIdx !== undefined && !rows[i][editionIdx] && data.edition) {
+          sheet.getRange(i + 1, editionIdx + 1).setValue(data.edition);
+        }
+        if (priceIdx !== undefined && !rows[i][priceIdx] && data.price) {
+          sheet.getRange(i + 1, priceIdx + 1).setValue(data.price);
+        }
+
         return {
-          id: rows[i][skuIdIdx].toString(),
-          name: rows[i][itemNameIdx].toString(),
+          id: existingSkuId,
+          name: existingName,
           isExisting: true
         };
       }
     }
 
+    // 2. 計算流水號
     let maxSerial = 0;
     const prefixRegex = new RegExp(`^${categoryCode}-?(\\d+)$`, 'i');
 
@@ -142,6 +175,7 @@ function appendSkuMasterRecord(data) {
     const newSkuId = `${categoryCode}${String(nextSerial).padStart(7, '0')}`;
     const timestamp = Utilities.formatDate(new Date(), "GMT+8", "yyyy-MM-dd HH:mm:ss");
 
+    // 3. 組裝寫入列
     const newRow = new Array(rows[0].length).fill("");
     newRow[skuIdIdx] = newSkuId;
     if (cateCodeIdx !== undefined) newRow[cateCodeIdx] = categoryCode;
@@ -152,6 +186,12 @@ function appendSkuMasterRecord(data) {
     if (barcodeIdx !== undefined) newRow[barcodeIdx] = data.barcode || "";
     if (imgIdx !== undefined) newRow[imgIdx] = data.imageUrl || "";
     if (innerImgIdx !== undefined) newRow[innerImgIdx] = data.innerImageUrl || "";
+    
+    // 🌟 寫入新欄位
+    if (publisherIdx !== undefined) newRow[publisherIdx] = data.publisher || "";
+    if (editionIdx !== undefined) newRow[editionIdx] = data.edition || "";
+    if (priceIdx !== undefined) newRow[priceIdx] = data.price || "";
+
     if (sourceIdx !== undefined) newRow[sourceIdx] = data.source || "LINE拍照入庫";
     if (creatorIdx !== undefined) newRow[creatorIdx] = data.creator || "系統建檔";
     if (timeIdx !== undefined) newRow[timeIdx] = timestamp;
@@ -639,9 +679,6 @@ function normalizeTitle(str) {
     .replace(/[：:，,、。·・《》〈〉（）()\[\]【】\-_—"']/g, "");
 }
 
-/**
- * 🌟 強化版 findSKU：副標題自動切分比對 + 作者加權評分
- */
 function findSKU(keyword, barcode = "", author = "") {
   if (!keyword && !barcode && !author) return [];
   
@@ -661,7 +698,6 @@ function findSKU(keyword, barcode = "", author = "") {
     const cleanBarcode = barcode ? barcode.toString().replace(/[^0-9]/g, "") : "";
     const normAuthorInput = normalizeTitle(author);
 
-    // 🌟 將輸入字串依常見分隔符（破折號、冒號、斜線）切分子詞
     const subSegments = rawKey
       .split(/[—–\-_:：\s/\\()（）「」『』《》〈〉]/)
       .map(s => normalizeTitle(s))
@@ -681,17 +717,12 @@ function findSKU(keyword, barcode = "", author = "") {
 
       let score = 0;
 
-      // 1. ISBN / 條碼命中
       if (cleanBarcode && barcodeVal && cleanBarcode === barcodeVal) {
         score += 100;
       }
-
-      // 2. 品項編號完全命中
       if (rawKey && skuVal && skuVal.toLowerCase() === rawKey.toLowerCase()) {
         score += 100;
       }
-
-      // 3. 全名標準化比對
       if (normKey && normName) {
         if (normKey === normName) {
           score += 80;
@@ -699,8 +730,6 @@ function findSKU(keyword, barcode = "", author = "") {
           score += 60;
         }
       }
-
-      // 4. 副標題 / 片段命中 (精準化解「法會」vs「法命」的差異)
       if (subSegments.length > 0 && normName) {
         for (const seg of subSegments) {
           if (normName.includes(seg)) {
@@ -708,8 +737,6 @@ function findSKU(keyword, barcode = "", author = "") {
           }
         }
       }
-
-      // 5. 作者加權比對
       if (normAuthorInput && normAuthor) {
         if (normAuthor.includes(normAuthorInput) || normAuthorInput.includes(normAuthor)) {
           score += 30;
