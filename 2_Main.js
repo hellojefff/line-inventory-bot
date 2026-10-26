@@ -80,10 +80,11 @@ function searchSkuCandidates(keyword) {
   try {
     const matched = findSKU(keyword);
     const candidates = matched.map(m => {
-      const rawImg = (m['封面圖片URL'] || m['圖片網址'] || m['內頁圖片URL'] || m['版權頁圖片URL'] || '').toString().trim();
-      let thumbUrl = rawImg;
-      if (rawImg.includes("drive.google.com")) {
-        const match = rawImg.match(/id=([a-zA-Z0-9_-]+)/) || rawImg.match(/\/d\/([a-zA-Z0-9_-]+)/);
+      const rawCover = (m['封面圖片URL'] || m['圖片網址'] || '').toString().trim();
+      const rawInner = (m['內頁圖片URL'] || m['版權頁圖片URL'] || '').toString().trim();
+      let thumbUrl = rawCover || rawInner;
+      if (thumbUrl.includes("drive.google.com")) {
+        const match = thumbUrl.match(/id=([a-zA-Z0-9_-]+)/) || thumbUrl.match(/\/d\/([a-zA-Z0-9_-]+)/);
         if (match && match[1]) thumbUrl = `https://lh3.googleusercontent.com/d/${match[1]}=w200`;
       }
       return {
@@ -92,7 +93,14 @@ function searchSkuCandidates(keyword) {
         author: (m['規格或作者'] || m['規格/作者'] || m['作者'] || '').toString(),
         category: (m['大類名稱'] || m['大類'] || '').toString(),
         barcode: (m['條碼編號'] || m['ISBN/條碼'] || '').toString(),
-        imageUrl: thumbUrl
+        imageUrl: thumbUrl,
+        hasCover: !!rawCover,
+        hasInner: !!rawInner,
+        coverUrl: rawCover,
+        innerUrl: rawInner,
+        publisher: (m['出版社'] || '').toString(),
+        edition: (m['版次與年份'] || '').toString(),
+        price: (m['定價'] || '').toString()
       };
     });
     return { success: true, candidates: candidates };
@@ -101,16 +109,55 @@ function searchSkuCandidates(keyword) {
   }
 }
 
-function analyzeSingleCipPhoto(base64Data, mimeType) {
+/**
+ * 🌟 盤點介面專用：補拍單書封面並直接更新主檔
+ */
+function uploadStocktakeCover(skuId, base64Data, mimeType) {
   try {
-    if (!CONFIG.GEMINI_API_KEY) throw new Error("未設定 GEMINI_API_KEY");
+    if (!CONFIG.INBOUND_IMG_FOLDER_ID) throw new Error("未設定 INBOUND_IMG_FOLDER_ID");
+    const folder = DriveApp.getFolderById(CONFIG.INBOUND_IMG_FOLDER_ID);
+    const timestampStr = Utilities.formatDate(new Date(), "GMT+8", "yyyyMMdd_HHmmss");
 
-    const prompt = `你是一個專業圖書編目專家。請仔細辨識這張書籍【版權頁 / 內頁 CIP 預行編目資料 / 封底條碼】照片：
+    const coverBlob = Utilities.newBlob(Utilities.base64Decode(base64Data), mimeType || "image/jpeg", `COVER_${skuId}_${timestampStr}.jpg`);
+    const coverFile = folder.createFile(coverBlob);
+    const coverUrl = `https://drive.google.com/uc?id=${coverFile.getId()}`;
+    const thumbUrl = `https://lh3.googleusercontent.com/d/${coverFile.getId()}=w200`;
+
+    // 直接同步寫入主檔
+    updateSkuMetadataAndImages(skuId, { coverUrl: coverUrl });
+
+    return { success: true, coverUrl: coverUrl, thumbUrl: thumbUrl };
+  } catch (err) {
+    writeDebugLog("uploadStocktakeCover 錯誤: " + err.message);
+    return { success: false, message: err.message };
+  }
+}
+
+/**
+ * 🌟 盤點介面專用：補拍單書版權頁、存圖、解析 CIP 並回填主檔
+ */
+function uploadAndAnalyzeSingleCipForStocktake(skuId, base64Data, mimeType) {
+  try {
+    if (!CONFIG.INBOUND_IMG_FOLDER_ID) throw new Error("未設定 INBOUND_IMG_FOLDER_ID");
+    const folder = DriveApp.getFolderById(CONFIG.INBOUND_IMG_FOLDER_ID);
+    const timestampStr = Utilities.formatDate(new Date(), "GMT+8", "yyyyMMdd_HHmmss");
+
+    // 1. 存入 Google Drive
+    const innerBlob = Utilities.newBlob(Utilities.base64Decode(base64Data), mimeType || "image/jpeg", `CIP_${skuId}_${timestampStr}.jpg`);
+    const innerFile = folder.createFile(innerBlob);
+    const innerUrl = `https://drive.google.com/uc?id=${innerFile.getId()}`;
+
+    // 2. 調用 Gemini 解析 CIP
+    const prompt = `你是一個專業圖書編目專家。請仔細觀察這張書籍【版權頁 / 內頁 CIP 預行編目資料 / 封底條碼】照片：
 1. 提取最標準權威的正題名/書名。
 2. 提取著譯者姓名。
-3. 提取純數字 ISBN 或條碼數字。
+3. 提取純數字 ISBN 條碼。
+4. 提取出版社（出版者或發行機構）。
+5. 提取版次與出版年月（例如「2014年3月 二版」）。
+6. 提取定價數字（例如「380」）。
+若照片完全找不到某個欄位，請填入空字串。
 請只回傳標準 JSON：
-{"itemName": "完整書名", "author": "作者姓名", "barcode": "純數字ISBN"}`;
+{"itemName": "完整書名", "author": "作者姓名", "barcode": "純數字ISBN", "publisher": "出版社", "edition": "版次與年份", "price": "定價"}`;
 
     const payload = {
       contents: [{
@@ -130,50 +177,40 @@ function analyzeSingleCipPhoto(base64Data, mimeType) {
       muteHttpExceptions: true
     });
 
-    let aiResult = { itemName: "", author: "", barcode: "" };
+    let meta = { itemName: "", author: "", barcode: "", publisher: "", edition: "", price: "" };
     if (response.getResponseCode() === 200) {
       const resJson = JSON.parse(response.getContentText());
       if (resJson.candidates && resJson.candidates[0].content && resJson.candidates[0].content.parts[0].text) {
         let raw = resJson.candidates[0].content.parts[0].text;
         raw = raw.replace(/```json/gi, '').replace(/```/g, '').trim();
-        aiResult = JSON.parse(raw);
+        meta = JSON.parse(raw);
       }
     }
 
-    const matched = findSKU(aiResult.itemName, aiResult.barcode, aiResult.author);
-    const candidates = matched.map(m => {
-      const rawImg = (m['封面圖片URL'] || m['圖片網址'] || m['內頁圖片URL'] || m['版權頁圖片URL'] || '').toString().trim();
-      let thumbUrl = rawImg;
-      if (rawImg.includes("drive.google.com")) {
-        const match = rawImg.match(/id=([a-zA-Z0-9_-]+)/) || rawImg.match(/\/d\/([a-zA-Z0-9_-]+)/);
-        if (match && match[1]) thumbUrl = `https://lh3.googleusercontent.com/d/${match[1]}=w200`;
-      }
-      return {
-        skuId: (m['品項編號'] || m['sku_id'] || '').toString(),
-        itemName: (m['物品名稱'] || m['品名'] || '').toString(),
-        author: (m['規格或作者'] || m['規格/作者'] || m['作者'] || '').toString(),
-        category: (m['大類名稱'] || m['大類'] || '').toString(),
-        barcode: (m['條碼編號'] || m['ISBN/條碼'] || '').toString(),
-        imageUrl: thumbUrl
-      };
+    // 3. 即時補回 SKU_MASTER 主檔
+    updateSkuMetadataAndImages(skuId, {
+      innerUrl: innerUrl,
+      publisher: meta.publisher || "",
+      edition: meta.edition || "",
+      price: meta.price || "",
+      barcode: meta.barcode || ""
     });
 
     return {
       success: true,
-      itemName: aiResult.itemName || "",
-      author: aiResult.author || "",
-      barcode: aiResult.barcode || "",
-      candidates: candidates
+      innerUrl: innerUrl,
+      publisher: meta.publisher || "",
+      edition: meta.edition || "",
+      price: meta.price || "",
+      recognizedTitle: meta.itemName || "",
+      recognizedAuthor: meta.author || ""
     };
   } catch (err) {
-    writeDebugLog("analyzeSingleCipPhoto 錯誤: " + err.message);
-    return { success: false, message: err.message, candidates: [] };
+    writeDebugLog("uploadAndAnalyzeSingleCipForStocktake 錯誤: " + err.message);
+    return { success: false, message: err.message };
   }
 }
 
-/**
- * 🌟 網頁【零庫存建檔模式】：接收雙照片，提取書名、作者、ISBN、出版社、版次、定價
- */
 function uploadAndAnalyzeDualImages(coverBase64, innerBase64, mimeType) {
   try {
     if (!CONFIG.INBOUND_IMG_FOLDER_ID) {
@@ -234,13 +271,13 @@ ${coverBase64 ? '- 第一張影像：書籍【封面】（有題名設計、視�
 ${innerBase64 ? '- 第二張影像：書籍【版權頁 / 內頁 CIP 國家圖書館預行編目資料】（具有最標準權威的正題名、著譯者、ISBN 編號、出版社、版次與定價）。' : ''}
 
 【提取準則】：
-1. 【物品名稱/書名】：優先以【版權頁/CIP】所標記的正式出版品書名為準（若有分卷號如「1：山海傳奇」，請整合至正題名）。
-2. 【作者/著者】：優先以版權頁/CIP所載之著者、譯者或註述者姓名為主（例如「蕭瓊瑞」）。
+1. 【物品名稱/書名】：優先以【版權頁/CIP】所標記的正式出版品書名為準。
+2. 【作者/著者】：優先以版權頁/CIP所載之著者、譯者或註述者姓名為主。
 3. 【ISBN或條碼】：請從版權頁的 ISBN 欄位提取純數字條碼（去除連字號與括號說明）。
 4. 【大類名稱】：推論所屬大類（出版品與佛藝書籍、宗教與儀式物品、專業影音廣播、辦公與生活家電、消耗品與雜項）。
-5. 【出版社】：版權頁或CIP所記載之出版者或發行機構名稱（例如「藝術家出版社」）。
-6. 【版次與年份】：版權頁記載之最新版次與印刷年份（例如「2014年3月 二版」或「2003年 初版」）。
-7. 【定價】：版權頁標示之定價數字（例如「380」）。
+5. 【出版社】：版權頁或CIP所記載之出版者或發行機構名稱。
+6. 【版次與年份】：版權頁記載之最新版次與印刷年份。
+7. 【定價】：版權頁標示之定價數字。
 
 請務必只回傳標準 JSON 字串：
 {"itemName": "完整書名", "author": "作者姓名", "barcode": "純數字ISBN", "category": "大類名稱", "publisher": "出版社名稱", "edition": "版次與年份", "price": "定價"}`;
@@ -301,10 +338,11 @@ function analyzeStocktakePhoto(base64Data, mimeType) {
       const matched = (keyword || barcode || author) ? findSKU(keyword, barcode, author) : [];
 
       const candidates = matched.map(m => {
-        const rawImg = (m['封面圖片URL'] || m['圖片網址'] || m['內頁圖片URL'] || m['版權頁圖片URL'] || '').toString().trim();
-        let thumbUrl = rawImg;
-        if (rawImg.includes("drive.google.com")) {
-          const match = rawImg.match(/id=([a-zA-Z0-9_-]+)/) || rawImg.match(/\/d\/([a-zA-Z0-9_-]+)/);
+        const rawCover = (m['封面圖片URL'] || m['圖片網址'] || '').toString().trim();
+        const rawInner = (m['內頁圖片URL'] || m['版權頁圖片URL'] || '').toString().trim();
+        let thumbUrl = rawCover || rawInner;
+        if (thumbUrl.includes("drive.google.com")) {
+          const match = thumbUrl.match(/id=([a-zA-Z0-9_-]+)/) || thumbUrl.match(/\/d\/([a-zA-Z0-9_-]+)/);
           if (match && match[1]) {
             thumbUrl = `https://lh3.googleusercontent.com/d/${match[1]}=w200`;
           }
@@ -316,7 +354,14 @@ function analyzeStocktakePhoto(base64Data, mimeType) {
           author: (m['規格或作者'] || m['規格/作者'] || m['作者'] || '').toString(),
           category: (m['大類名稱'] || m['大類'] || '').toString(),
           barcode: (m['條碼編號'] || m['ISBN/條碼'] || '').toString(),
-          imageUrl: thumbUrl
+          imageUrl: thumbUrl,
+          hasCover: !!rawCover,
+          hasInner: !!rawInner,
+          coverUrl: rawCover,
+          innerUrl: rawInner,
+          publisher: (m['出版社'] || '').toString(),
+          edition: (m['版次與年份'] || '').toString(),
+          price: (m['定價'] || '').toString()
         };
       });
 
