@@ -68,6 +68,31 @@
       line-height: 1.4;
     }
 
+    /* 單一動態主相機按鈕 */
+    .camera-trigger {
+      display: block;
+      width: 100%;
+      background-color: #16a34a;
+      color: #ffffff;
+      text-align: center;
+      padding: 14px 0;
+      border-radius: 10px;
+      font-size: 1.05rem;
+      font-weight: 600;
+      cursor: pointer;
+      margin-bottom: 14px;
+      box-shadow: 0 3px 8px rgba(22, 163, 74, 0.25);
+      transition: all 0.2s ease;
+    }
+    .camera-trigger:active {
+      transform: scale(0.98);
+      background-color: #15803d;
+    }
+    .camera-trigger.highlight {
+      background-color: #15803d;
+      box-shadow: 0 0 0 4px rgba(22, 163, 74, 0.2);
+    }
+
     .dual-photo-grid {
       display: flex;
       gap: 10px;
@@ -97,21 +122,6 @@
       border-radius: 6px;
       margin-top: 8px;
       display: none;
-    }
-
-    .camera-trigger {
-      display: block;
-      width: 100%;
-      background-color: #16a34a;
-      color: #ffffff;
-      text-align: center;
-      padding: 14px 0;
-      border-radius: 10px;
-      font-size: 1.05rem;
-      font-weight: 600;
-      cursor: pointer;
-      margin-bottom: 14px;
-      box-shadow: 0 3px 8px rgba(22, 163, 74, 0.25);
     }
 
     #previewImg {
@@ -194,7 +204,6 @@
       margin-top: 4px;
     }
 
-    /* 快捷輔助按鈕工具列 */
     .card-tools {
       display: flex;
       flex-wrap: wrap;
@@ -302,18 +311,6 @@
       cursor: not-allowed;
       box-shadow: none;
     }
-    .close-btn {
-      width: 100%;
-      background: #f1f5f9;
-      color: #475569;
-      padding: 12px 0;
-      border: 1px solid #cbd5e1;
-      border-radius: 8px;
-      font-size: 0.95rem;
-      font-weight: 600;
-      cursor: pointer;
-      margin-top: 8px;
-    }
 
     label.field-lbl {
       display: block;
@@ -379,25 +376,27 @@
     <h2 id="mainHeading">📸 格位拍照批次盤點</h2>
     <p class="desc" id="mainDesc">請拍照比對物資，支援一圖多本，免開鍵盤打字！</p>
 
-    <img id="previewImg" alt="預覽圖">
-    <div id="statusBox" class="status-box"></div>
-
     <!-- 盤點模式區塊 -->
     <div id="stocktakeSection" style="display:none;">
-      <label class="camera-trigger" for="cameraStocktakeFile">📷 開啟相機 拍攝架上物資</label>
+      <!-- 🌟 單一動態主相機按鈕：平時與完成後狀態動態切換 -->
+      <label class="camera-trigger" id="mainStocktakeCameraBtn" for="cameraStocktakeFile">
+        📷 開啟相機 拍攝架上物資
+      </label>
       <input type="file" id="cameraStocktakeFile" style="display:none;" accept="image/*" capture="environment">
 
-      <!-- 專屬隱藏相機槽：單書補拍封面 & 補拍版權頁 -->
       <input type="file" id="cameraSingleCoverFile" style="display:none;" accept="image/*" capture="environment">
       <input type="file" id="cameraSingleCipFile" style="display:none;" accept="image/*" capture="environment">
 
+      <img id="previewImg" alt="預覽圖">
+      <div id="statusBox" class="status-box"></div>
+
       <div id="itemsContainer"></div>
       <button id="batchSubmitBtn" class="batch-submit-btn" style="display:none;" onclick="submitBatchStocktake()">💾 確認並寫入庫存 (0 件)</button>
-      <button id="btnContinueNext" class="close-btn" style="display:none;" onclick="continueNextBatch()">🔄 拍本格下一批物資</button>
     </div>
 
     <!-- 建檔模式區塊 -->
     <div id="inboundSection" style="display:none;">
+      <div id="statusBoxInbound" class="status-box"></div>
       <div class="dual-photo-grid">
         <label class="photo-slot" id="slotCover" for="cameraCoverFile">
           <div class="photo-slot-icon">📸</div>
@@ -539,7 +538,7 @@
     }
 
     function triggerDualAnalyze() {
-      const statusBox = document.getElementById('statusBox');
+      const statusBox = document.getElementById('statusBoxInbound');
       const btn = document.getElementById('btnTriggerDualAnalyze');
       btn.disabled = true;
 
@@ -607,7 +606,7 @@
         .withSuccessHandler(res => {
           btn.disabled = false;
           btn.innerText = '💾 確認並建立物資主檔';
-          const sb = document.getElementById('statusBox');
+          const sb = document.getElementById('statusBoxInbound');
           if (res.success) {
             sb.className = 'status-box success';
             sb.innerHTML = `🎉 ${res.message}<br>您可繼續拍攝下一件物資。`;
@@ -668,8 +667,18 @@
       const file = e.target.files[0];
       if (!file) return;
 
+      // 🌟 點擊拍照後，自動收起舊訊息並還原主按鈕樣式
+      const mainBtn = document.getElementById('mainStocktakeCameraBtn');
+      mainBtn.classList.remove('highlight');
+      mainBtn.innerText = '📷 開啟相機 拍攝架上物資';
+
       const preview = document.getElementById('previewImg');
       const statusBox = document.getElementById('statusBox');
+      const container = document.getElementById('itemsContainer');
+      const submitBtn = document.getElementById('batchSubmitBtn');
+
+      container.innerHTML = '';
+      submitBtn.style.display = 'none';
 
       preview.src = URL.createObjectURL(file);
       preview.style.display = 'block';
@@ -689,7 +698,6 @@
       const statusBox = document.getElementById('statusBox');
       const container = document.getElementById('itemsContainer');
       const submitBtn = document.getElementById('batchSubmitBtn');
-      const nextBtn = document.getElementById('btnContinueNext');
 
       if (!res.success || !res.items || res.items.length === 0) {
         statusBox.className = 'status-box error';
@@ -727,7 +735,6 @@
           ? `<img id="thumb_${index}" src="${defaultImgUrl}" class="item-thumb" alt="封面" onclick="window.open('${defaultImgUrl}', '_blank')">`
           : `<div id="thumb_${index}" class="item-thumb" style="display:flex;flex-direction:column;align-items:center;justify-content:center;color:#94a3b8;font-size:0.75rem;"><span style="font-size:1.4rem;">📖</span><span>缺封面</span></div>`;
 
-        // 🌟 輕量非阻擋狀態提示徽章
         let statusBadgesHtml = '';
         if (defaultSkuId) {
           if (!hasCover) statusBadgesHtml += `<span class="badge yellow" id="badgeCover_${index}">📷 待補封面</span> `;
@@ -763,7 +770,6 @@
               
               <div class="meta-badges" id="metaBadges_${index}">${statusBadgesHtml}</div>
 
-              <!-- 🌟 專屬微調、補拍封面與補拍版權頁工具列 -->
               <div class="card-tools">
                 <button type="button" class="tool-btn orange" onclick="triggerSingleCover(${index})">📸 補拍封面</button>
                 <button type="button" class="tool-btn blue" onclick="triggerSingleCip(${index})">📖 補拍版權頁</button>
@@ -796,7 +802,6 @@
       });
 
       submitBtn.style.display = 'block';
-      nextBtn.style.display = 'block';
       updateSubmitCount();
     }
 
@@ -806,7 +811,6 @@
       document.getElementById(`skuBadge_${itemIndex}`).innerText = `[${skuId}]`;
       updateCardThumbnail(itemIndex, imgUrl);
 
-      // 更新徽章
       let badgesHtml = '';
       if (!hasCover) badgesHtml += `<span class="badge yellow" id="badgeCover_${itemIndex}">📷 待補封面</span> `;
       if (!hasInner) badgesHtml += `<span class="badge yellow" id="badgeInner_${itemIndex}">📖 待補內頁</span> `;
@@ -833,7 +837,7 @@
       }
     }
 
-    // ==================== 🌟 專屬補拍封面邏輯 ====================
+    // ==================== 專屬補拍封面邏輯 ====================
     function triggerSingleCover(index) {
       const skuId = document.getElementById(`selectedSkuId_${index}`).value;
       if (!skuId) {
@@ -881,7 +885,7 @@
       });
     });
 
-    // ==================== 🌟 專屬補拍版權頁邏輯 ====================
+    // ==================== 專屬補拍版權頁邏輯 ====================
     function triggerSingleCip(index) {
       const skuId = document.getElementById(`selectedSkuId_${index}`).value;
       if (!skuId) {
@@ -1071,10 +1075,15 @@
           submitBtn.disabled = false;
           if (res.success) {
             statusBox.className = 'status-box success';
-            statusBox.innerHTML = `🎉 <b>成功完成 ${toSubmit.length} 筆物資盤點！</b><br>庫存與主檔已同步更新。您可直接拍攝下一批物資，或關閉視窗回到 LINE。`;
+            statusBox.innerHTML = `🎉 <b>成功完成 ${toSubmit.length} 筆物資盤點！</b><br>庫存與主檔已同步更新。請直接點擊上方按鈕拍攝下一批物資，或關閉視窗回到 LINE。`;
             document.getElementById('itemsContainer').innerHTML = '';
             submitBtn.style.display = 'none';
             document.getElementById('previewImg').style.display = 'none';
+
+            // 🌟 核心優化：將上方主按鈕文字動態轉為引導狀態，並加上呼吸反饋
+            const mainBtn = document.getElementById('mainStocktakeCameraBtn');
+            mainBtn.innerText = '📷 拍攝本格下一批物資';
+            mainBtn.classList.add('highlight');
           } else {
             statusBox.className = 'status-box error';
             statusBox.innerHTML = `❌ 寫入失敗：${res.message}`;
@@ -1086,15 +1095,6 @@
           statusBox.innerHTML = `❌ 連線異常：${err.message || err}`;
         })
         .batchUpdateStock(CELL_CODE, USER_ID, toSubmit);
-    }
-
-    function continueNextBatch() {
-      document.getElementById('itemsContainer').innerHTML = '';
-      document.getElementById('batchSubmitBtn').style.display = 'none';
-      document.getElementById('btnContinueNext').style.display = 'none';
-      document.getElementById('previewImg').style.display = 'none';
-      document.getElementById('statusBox').style.display = 'none';
-      document.getElementById('cameraStocktakeFile').click();
     }
 
     function handleVisionError(err) {
