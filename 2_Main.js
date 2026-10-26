@@ -2,7 +2,7 @@
  * 模組 2：主程式進入點、Web App RPC、LINE 狀態機與標籤視覺辨識 (2_Main.js)
  */
 
-// ==================== 安全變數安全取值輔助工具 ====================
+// ==================== 安全變數取值輔助工具 ====================
 function getLineAccessToken() {
   if (typeof CONFIG !== 'undefined' && CONFIG && CONFIG.LINE_ACCESS_TOKEN) return CONFIG.LINE_ACCESS_TOKEN;
   if (typeof LINE_ACCESS_TOKEN !== 'undefined' && LINE_ACCESS_TOKEN) return LINE_ACCESS_TOKEN;
@@ -518,19 +518,20 @@ function fetchLineImageBlob(messageId) {
 }
 
 /**
- * 辨識層板上的手寫/印刷標籤（如 B3-S2、B6-S3），內建 S 與 5 強制筆跡校正
+ * 辨識層板/抽屜標籤（支援 B1-S1 至 B24-S4 及抽屜 B22-D1~D3），自動容錯 S 與 5
  */
 function recognizeShelfLabelFromPhoto(base64Data, mimeType) {
   const apiKey = getGeminiApiKey();
   if (!apiKey) return null;
 
-  const prompt = `你是一個精準的佛寺書架標籤辨識專家。請觀察這張照片，尋找貼在書架層板邊緣的白色手寫貼紙或標籤：
+  const prompt = `你是一個精準的佛寺書架與儲位標籤辨識專家。請觀察這張照片，尋找貼在書架層板邊緣或抽屜上的白色手寫貼紙或標籤：
 標籤規則：
-1. 格式固定為「B」接櫃號數字、「-」連字號、接著是「S」接層號數字（例如：B1-S1 到 B6-S4）。
-2. ⚠️ 關鍵筆跡校正：手寫的英文字母「S」常被誤認成數字「5」（例如「B3-52」實際上是「B3-S2」、「B4-53」實際上是「B4-S3」、「B6-53」實際上是「B6-S3」）。請務必依規則校正為「S」。
+1. 格式開頭必定為「B」接 1~2 位數字櫃號（例如 B1 到 B24）。
+2. 連字號「-」後方為層架「S」或抽屜「D」接數字（例如 B3-S2、B6-S3、B7-S1、B22-D1、B24-S2）。
+3. ⚠️ 關鍵筆跡校正：手寫英文字母「S」常被誤認成數字「5」（例如「B3-52」實際上是「B3-S2」、「B6-53」是「B6-S3」）。請務必依規則校正為「S」。
 
 若畫面中有此標籤貼紙，請只回傳標準 JSON：
-{"found": true, "code": "B6-S3"}
+{"found": true, "code": "B3-S2"}
 若完全找不到貼紙，請回傳：
 {"found": false, "code": ""}`;
 
@@ -560,9 +561,12 @@ function recognizeShelfLabelFromPhoto(base64Data, mimeType) {
         raw = raw.replace(/```json/gi, '').replace(/```/g, '').trim();
         const parsed = JSON.parse(raw);
         if (parsed.found && parsed.code) {
-          const match = parsed.code.match(/B([1-6])[-_/\s]?[S5](\d)/i);
+          const match = parsed.code.match(/B(\d{1,2})[-_/\s]?([SD5])(\d{1,2})/i);
           if (match) {
-            return `B${match[1]}-S${match[2]}`.toUpperCase();
+            const boxNum = match[1];
+            const type = (match[2].toUpperCase() === '5' || match[2].toUpperCase() === 'S') ? 'S' : match[2].toUpperCase();
+            const shelfNum = match[3];
+            return `B${boxNum}-${type}${shelfNum}`;
           }
           return parsed.code.toUpperCase();
         }
@@ -575,9 +579,9 @@ function recognizeShelfLabelFromPhoto(base64Data, mimeType) {
 }
 
 /**
- * 依據標籤短碼（如 B6-S3）反查 SUB_ZONE_DETAIL 的 JSON 配置
+ * 依據標籤短碼（如 B3-S2、B6-S3、B22-D1）反查 SUB_ZONE_DETAIL 的 JSON 配置
  */
-function findShelfByLabel(shortCode, preferredZoneId) {
+function findShelfByLabel(shortCode, preferredLocOrZoneId) {
   return withSpreadsheet(ss => {
     const sheet = ss.getSheetByName("SUB_ZONE_DETAIL");
     if (!sheet) return null;
@@ -587,15 +591,18 @@ function findShelfByLabel(shortCode, preferredZoneId) {
     const zoneNameIdx = colMap['儲位分區名稱'];
     const jsonIdx = colMap['實體層格微細配置'];
 
-    if (preferredZoneId) {
+    // 1. 若當前 Session 鎖定了特定場域空間（如小教室 DA-004），優先比對該空間底下的所有分區
+    if (preferredLocOrZoneId) {
       for (let i = 1; i < data.length; i++) {
-        if (data[i][zoneIdIdx] && data[i][zoneIdIdx].toString().trim() === preferredZoneId) {
-          const matched = checkJsonForShelf(data[i][jsonIdx], shortCode, data[i][zoneIdIdx], data[i][zoneNameIdx]);
+        const currentZoneId = data[i][zoneIdIdx] ? data[i][zoneIdIdx].toString().trim() : "";
+        if (currentZoneId && (currentZoneId.startsWith(preferredLocOrZoneId) || currentZoneId === preferredLocOrZoneId)) {
+          const matched = checkJsonForShelf(data[i][jsonIdx], shortCode, currentZoneId, data[i][zoneNameIdx]);
           if (matched) return matched;
         }
       }
     }
 
+    // 2. 全域尋找
     for (let i = 1; i < data.length; i++) {
       const zoneId = data[i][zoneIdIdx] ? data[i][zoneIdIdx].toString().trim() : "";
       const zoneName = data[i][zoneNameIdx] ? data[i][zoneNameIdx].toString().trim() : "";
@@ -664,7 +671,8 @@ function handleLineImageMessage(event) {
       return;
     }
 
-    const targetShelf = findShelfByLabel(recognizedCode, cachedSession.zoneId);
+    // 優先以已選定的 locId 或 zoneId 鎖定檢索
+    const targetShelf = findShelfByLabel(recognizedCode, cachedSession.locId || cachedSession.zoneId);
     if (!targetShelf) {
       replyTextMessage(replyToken, `⚠️ 辨識到標籤【${recognizedCode}】，但在系統層格配置中找不到對應儲位，請確認標籤文字是否正確。`);
       return;
@@ -687,7 +695,6 @@ function handleLineImageMessage(event) {
       `&box=${encodeURIComponent(targetShelf.boxName)}` +
       `&space=${encodeURIComponent(targetShelf.zoneName)}`;
 
-    // 調用 5_FlexTemplates.js 既有標準圖卡
     replyFlexSearchPromptCard(replyToken, targetShelf.zoneName, targetShelf.boxName, targetShelf.shelfName, targetShelf.cellCode, false, webAppStocktakeUrl);
   } catch (err) {
     writeDebugLog("handleLineImageMessage 錯誤: " + err.message);
@@ -759,7 +766,10 @@ const StateHandlers = {
     ctx.session.spaceName = spaceName;
     SessionManager.save(ctx.lineUid, ctx.session);
     const zoneItems = zones.map(z => ({ title: z.zone_name, desc: `${spaceName} - ${z.zone_name}`, value: z.zone_id }));
-    replyFlexMenuCard(ctx.replyToken, "🗄️ 選擇櫃位區域", `已定位空間：【${spaceName}】\n請點選要盤點的【櫃位/區域】：`, zoneItems, `↩️ 返回 [${ctx.session.floorName || "樓層空間"}]`);
+
+    // 🌟 核心升級：鎖定小教室後，引導志工可直接拍照標籤直達！
+    const promptDesc = `已鎖定空間：【${spaceName}】！\n\n📸 極速盤點：直接對準眼前櫃架貼紙拍照（如 B3-S2、B7-S1、B22-D1）即可秒開盤點！\n\n亦可點選下方區域手動選櫃：`;
+    replyFlexMenuCard(ctx.replyToken, "🗄️ 選擇櫃位區域", promptDesc, zoneItems, `↩️ 返回 [${ctx.session.floorName || "樓層空間"}]`);
   },
 
   [STATE.CHOOSE_ZONE]: function(ctx) {
@@ -778,7 +788,7 @@ const StateHandlers = {
     SessionManager.save(ctx.lineUid, ctx.session); 
 
     const boxItems = boxes.map(b => ({ title: b.display_label, desc: `點擊進入 ${b.display_label}`, value: b.display_label }));
-    const promptDesc = `已鎖定：【${zoneName}】\n\n📸 推薦快拍：直接拍照傳送層板標籤（如 B3-S2 或 B6-S3）直達盤點！\n\n或點選下方按鈕手動選櫃：`;
+    const promptDesc = `已鎖定分區：【${zoneName}】\n\n📸 推薦快拍：直接拍照傳送層板標籤（如 B3-S2 或 B6-S3）直達盤點！\n\n或點選下方按鈕手動選櫃：`;
     replyFlexMenuCard(ctx.replyToken, "🗃️ 選擇盤點櫃子", promptDesc, boxItems, `↩️ 返回 [${ctx.session.spaceName || "空間清單"}]`);
   },
 
@@ -960,7 +970,7 @@ function handleLineMessage(event) {
     return;
   }
 
-  // 🌟 相容常數字串與中文「結束盤點」
+  // 相容常數字串與中文「結束盤點」
   const isExitCommand = (userMessage === '結束盤點') || 
                         (userMessage === 'CMD_EXIT_STOCKTAKE') || 
                         (typeof CMD_EXIT_STOCKTAKE !== 'undefined' && userMessage === CMD_EXIT_STOCKTAKE) ||
@@ -1000,11 +1010,15 @@ function handleLineMessage(event) {
     return;
   }
 
-  // 若志工直接在文字框輸入標籤代碼（如輸入 B6-S3、B3-S2 或 B3S2）
-  const manualTagMatch = userMessage.match(/^B([1-6])[-_/\s]?[S5](\d)$/i);
+  // 🌟 手動輸入標籤代碼（支援 B1~B24，層架 S 或抽屜 D，例如 B3-S2、B22-D1）
+  const manualTagMatch = userMessage.match(/^B(\d{1,2})[-_/\s]?([SD5])(\d{1,2})$/i);
   if (manualTagMatch) {
-    const formattedTag = `B${manualTagMatch[1]}-S${manualTagMatch[2]}`.toUpperCase();
-    const targetShelf = findShelfByLabel(formattedTag, cachedSession ? cachedSession.zoneId : null);
+    const boxNum = manualTagMatch[1];
+    const type = (manualTagMatch[2].toUpperCase() === '5' || manualTagMatch[2].toUpperCase() === 'S') ? 'S' : manualTagMatch[2].toUpperCase();
+    const shelfNum = manualTagMatch[3];
+    const formattedTag = `B${boxNum}-${type}${shelfNum}`.toUpperCase();
+
+    const targetShelf = findShelfByLabel(formattedTag, cachedSession ? (cachedSession.locId || cachedSession.zoneId) : null);
     if (targetShelf) {
       const activeSession = cachedSession || {};
       activeSession.state = STATE.INPUT_SKU;
