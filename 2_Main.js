@@ -1,5 +1,5 @@
 /**
- * 模組 2：主程式進入點、Web App RPC 與 LINE 狀態機 (2_Main.js)
+ * 模組 2：主程式進入點、Web App RPC、LINE 狀態機與標籤視覺辨識 (2_Main.js)
  */
 
 // ==================== 1. Webhook 與網頁應用程式進入點 ====================
@@ -32,8 +32,13 @@ function doPost(e) {
 
       writeDebugLog(e.postData.contents);
 
-      if (event.type === 'message' && event.message && event.message.type === 'text') {
-        handleLineMessage(event);
+      // 分流處理文字與圖片訊息
+      if (event.type === 'message' && event.message) {
+        if (event.message.type === 'text') {
+          handleLineMessage(event);
+        } else if (event.message.type === 'image') {
+          handleLineImageMessage(event);
+        }
       }
     }
   } catch (error) {
@@ -109,9 +114,6 @@ function searchSkuCandidates(keyword) {
   }
 }
 
-/**
- * 🌟 盤點介面專用：補拍單書封面並直接更新主檔
- */
 function uploadStocktakeCover(skuId, base64Data, mimeType) {
   try {
     if (!CONFIG.INBOUND_IMG_FOLDER_ID) throw new Error("未設定 INBOUND_IMG_FOLDER_ID");
@@ -123,7 +125,6 @@ function uploadStocktakeCover(skuId, base64Data, mimeType) {
     const coverUrl = `https://drive.google.com/uc?id=${coverFile.getId()}`;
     const thumbUrl = `https://lh3.googleusercontent.com/d/${coverFile.getId()}=w200`;
 
-    // 直接同步寫入主檔
     updateSkuMetadataAndImages(skuId, { coverUrl: coverUrl });
 
     return { success: true, coverUrl: coverUrl, thumbUrl: thumbUrl };
@@ -133,25 +134,20 @@ function uploadStocktakeCover(skuId, base64Data, mimeType) {
   }
 }
 
-/**
- * 🌟 盤點介面專用：補拍單書版權頁、存圖、解析 CIP 並回填主檔
- */
 function uploadAndAnalyzeSingleCipForStocktake(skuId, base64Data, mimeType) {
   try {
     if (!CONFIG.INBOUND_IMG_FOLDER_ID) throw new Error("未設定 INBOUND_IMG_FOLDER_ID");
     const folder = DriveApp.getFolderById(CONFIG.INBOUND_IMG_FOLDER_ID);
     const timestampStr = Utilities.formatDate(new Date(), "GMT+8", "yyyyMMdd_HHmmss");
 
-    // 1. 存入 Google Drive
     const innerBlob = Utilities.newBlob(Utilities.base64Decode(base64Data), mimeType || "image/jpeg", `CIP_${skuId}_${timestampStr}.jpg`);
     const innerFile = folder.createFile(innerBlob);
     const innerUrl = `https://drive.google.com/uc?id=${innerFile.getId()}`;
 
-    // 2. 調用 Gemini 解析 CIP
     const prompt = `你是一個專業圖書編目專家。請仔細觀察這張書籍【版權頁 / 內頁 CIP 預行編目資料 / 封底條碼】照片：
 1. 提取最標準權威的正題名/書名。
 2. 提取著譯者姓名。
-3. 提取純數字 ISBN 條碼。
+3. 提取純數字 ISBN 條碼（去除所有連字號與括號說明）。
 4. 提取出版社（出版者或發行機構）。
 5. 提取版次與出版年月（例如「2014年3月 二版」）。
 6. 提取定價數字（例如「380」）。
@@ -187,7 +183,6 @@ function uploadAndAnalyzeSingleCipForStocktake(skuId, base64Data, mimeType) {
       }
     }
 
-    // 3. 即時補回 SKU_MASTER 主檔
     updateSkuMetadataAndImages(skuId, {
       innerUrl: innerUrl,
       publisher: meta.publisher || "",
@@ -273,7 +268,7 @@ ${innerBase64 ? '- 第二張影像：書籍【版權頁 / 內頁 CIP 國家圖�
 【提取準則】：
 1. 【物品名稱/書名】：優先以【版權頁/CIP】所標記的正式出版品書名為準。
 2. 【作者/著者】：優先以版權頁/CIP所載之著者、譯者或註述者姓名為主。
-3. 【ISBN或條碼】：請從版權頁的 ISBN 欄位提取純數字條碼（去除連字號與括號說明）。
+3. 【ISBN或條碼】：請從版權頁的 ISBN 欄位提取純數字條碼（去除所有連字號與括號說明）。
 4. 【大類名稱】：推論所屬大類（出版品與佛藝書籍、宗教與儀式物品、專業影音廣播、辦公與生活家電、消耗品與雜項）。
 5. 【出版社】：版權頁或CIP所記載之出版者或發行機構名稱。
 6. 【版次與年份】：版權頁記載之最新版次與印刷年份。
@@ -386,7 +381,7 @@ function callGeminiMultiItemRecognition(base64Data, mimeType) {
   const prompt = `你是一個專業的圖書與佛寺物資盤點助理。請觀察這張照片，辨識畫面中出現的所有書籍或物品：
 1. 找出畫面中所有清楚可見的書籍品名/書名（若有期數，如《覺風期刊 第82期》，請務必完整保留）。
 2. 若有標註作者、編著者，請擷取。
-3. 若有看見 ISBN 或條碼數字，請擷取。
+3. 若有看見 ISBN 或條碼數字，請擷取純數字。
 4. 請務必只回傳合法的 JSON 字串，格式限定為：
 {
   "items": [
@@ -465,7 +460,208 @@ function createSkuMasterItem(data) {
   }
 }
 
-// ==================== 3. Session 管理工具 ====================
+// ==================== 3. 🌟 實體櫃位標籤視覺辨識核心 ====================
+
+/**
+ * 從 LINE 取得使用者上傳的圖片二進位資料
+ */
+function fetchLineImageBlob(messageId) {
+  const url = `https://api-data.line.me/v2/bot/message/${messageId}/content`;
+  const response = UrlFetchApp.fetch(url, {
+    headers: {
+      'Authorization': 'Bearer ' + CONFIG.LINE_CHANNEL_ACCESS_TOKEN
+    },
+    muteHttpExceptions: true
+  });
+  if (response.getResponseCode() !== 200) {
+    throw new Error(`無法取得 LINE 圖片內容 (HTTP ${response.getResponseCode()})`);
+  }
+  return response.getBlob();
+}
+
+/**
+ * 辨識層板上的手寫/印刷標籤（如 B3-S2、B4-S3），內建 S 與 5 強制筆跡校正
+ */
+function recognizeShelfLabelFromPhoto(base64Data, mimeType) {
+  if (!CONFIG.GEMINI_API_KEY) return null;
+
+  const prompt = `你是一個精準的佛寺書架標籤辨識專家。請觀察這張照片，尋找貼在書架層板邊緣的白色手寫貼紙或標籤：
+標籤規則：
+1. 格式固定為「B」接櫃號數字、「-」連字號、接著是「S」接層號數字（例如：B1-S1 到 B6-S4）。
+2. ⚠️ 關鍵筆跡校正：手寫的英文字母「S」常被誤認成數字「5」（例如「B3-52」實際上是「B3-S2」、「B4-53」實際上是「B4-S3」）。請務必依規則校正為「S」。
+
+若畫面中有此標籤貼紙，請只回傳標準 JSON：
+{"found": true, "code": "B3-S2"}
+若完全找不到貼紙，請回傳：
+{"found": false, "code": ""}`;
+
+  const payload = {
+    contents: [{
+      parts: [
+        { text: prompt },
+        { inlineData: { mimeType: mimeType || "image/jpeg", data: base64Data } }
+      ]
+    }],
+    generationConfig: { responseMimeType: "application/json" }
+  };
+
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
+  try {
+    const response = UrlFetchApp.fetch(endpoint, {
+      method: "post",
+      contentType: "application/json",
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true
+    });
+
+    if (response.getResponseCode() === 200) {
+      const resJson = JSON.parse(response.getContentText());
+      if (resJson.candidates && resJson.candidates[0].content && resJson.candidates[0].content.parts[0].text) {
+        let raw = resJson.candidates[0].content.parts[0].text;
+        raw = raw.replace(/```json/gi, '').replace(/```/g, '').trim();
+        const parsed = JSON.parse(raw);
+        if (parsed.found && parsed.code) {
+          // 正則表示式二次防呆矯正：B[1-6]-[S5][1-4]
+          const match = parsed.code.match(/B([1-6])[-_/\s]?[S5](\d)/i);
+          if (match) {
+            return `B${match[1]}-S${match[2]}`.toUpperCase();
+          }
+          return parsed.code.toUpperCase();
+        }
+      }
+    }
+  } catch (err) {
+    writeDebugLog("recognizeShelfLabelFromPhoto 錯誤: " + err.message);
+  }
+  return null;
+}
+
+/**
+ * 依據標籤短碼（如 B3-S2）反查 SUB_ZONE_DETAIL 的 JSON 配置
+ */
+function findShelfByLabel(shortCode, preferredZoneId) {
+  return withSpreadsheet(ss => {
+    const sheet = ss.getSheetByName("SUB_ZONE_DETAIL");
+    if (!sheet) return null;
+    const data = sheet.getDataRange().getValues();
+    const colMap = getSheetColumnIndexes(data[0]);
+    const zoneIdIdx = colMap['儲位明細編碼'];
+    const zoneNameIdx = colMap['儲位分區名稱'];
+    const jsonIdx = colMap['實體層格微細配置'];
+
+    // 1. 若當前 Session 已鎖定某空間，優先在該空間尋找
+    if (preferredZoneId) {
+      for (let i = 1; i < data.length; i++) {
+        if (data[i][zoneIdIdx] && data[i][zoneIdIdx].toString().trim() === preferredZoneId) {
+          const matched = checkJsonForShelf(data[i][jsonIdx], shortCode, data[i][zoneIdIdx], data[i][zoneNameIdx]);
+          if (matched) return matched;
+        }
+      }
+    }
+
+    // 2. 全域尋找
+    for (let i = 1; i < data.length; i++) {
+      const zoneId = data[i][zoneIdIdx] ? data[i][zoneIdIdx].toString().trim() : "";
+      const zoneName = data[i][zoneNameIdx] ? data[i][zoneNameIdx].toString().trim() : "";
+      const jsonStr = data[i][jsonIdx];
+      const matched = checkJsonForShelf(jsonStr, shortCode, zoneId, zoneName);
+      if (matched) return matched;
+    }
+
+    return null;
+  }, false);
+}
+
+function checkJsonForShelf(jsonStr, shortCode, zoneId, zoneName) {
+  if (!jsonStr) return null;
+  try {
+    const boxes = JSON.parse(jsonStr);
+    for (const box of boxes) {
+      if (!box.shelves) continue;
+      for (const shelf of box.shelves) {
+        const cell = shelf.cell_code || "";
+        if (cell.toUpperCase().endsWith('#' + shortCode.toUpperCase()) || 
+            cell.toUpperCase().endsWith('-' + shortCode.toUpperCase()) ||
+            cell.toUpperCase() === shortCode.toUpperCase()) {
+          return {
+            cellCode: shelf.cell_code,
+            shelfName: shelf.name,
+            boxName: box.box_name || box.box_id,
+            zoneId: zoneId,
+            zoneName: zoneName || "儲位分區",
+            defaultItem: shelf.default_item || ""
+          };
+        }
+      }
+    }
+  } catch (e) {}
+  return null;
+}
+
+/**
+ * 🌟 處理 LINE 圖片訊息：自動辨識櫃位標籤直達盤點
+ */
+function handleLineImageMessage(event) {
+  const replyToken = event.replyToken;
+  const lineUid = event.source.userId;
+  const messageId = event.message.id;
+
+  const currentVolunteer = getVolunteerByLineUid(lineUid);
+  if (!currentVolunteer) {
+    replyTextMessage(replyToken, "🙏 您好！請先完成志工身份綁定，再進行盤點作業。");
+    return;
+  }
+
+  const myUserId = currentVolunteer['人員編號'];
+  const myName = currentVolunteer['人員姓名'];
+  const cachedSession = SessionManager.get(lineUid) || {};
+
+  try {
+    const blob = fetchLineImageBlob(messageId);
+    const base64Data = Utilities.base64Encode(blob.getBytes());
+    const mimeType = blob.getContentType();
+
+    // 1. 辨識照片中的櫃位標籤
+    const recognizedCode = recognizeShelfLabelFromPhoto(base64Data, mimeType);
+    if (!recognizedCode) {
+      replyTextMessage(replyToken, "⚠️ 未能在照片中看清櫃位標籤貼紙（例如 B3-S2）。\n\n💡 請靠近一點、對焦清楚層板邊緣的白底手寫貼紙重新拍照！");
+      return;
+    }
+
+    // 2. 反查儲位配置（若已選空間優先從該空間匹配）
+    const targetShelf = findShelfByLabel(recognizedCode, cachedSession.zoneId);
+    if (!targetShelf) {
+      replyTextMessage(replyToken, `⚠️ 辨識到標籤【${recognizedCode}】，但在系統層格配置中找不到對應儲位，請確認標籤文字是否正確。`);
+      return;
+    }
+
+    // 3. 更新 Session，鎖定格位
+    cachedSession.state = STATE.INPUT_SKU;
+    cachedSession.cellCode = targetShelf.cellCode;
+    cachedSession.shelfName = targetShelf.shelfName;
+    cachedSession.boxName = targetShelf.boxName;
+    cachedSession.zoneId = targetShelf.zoneId;
+    cachedSession.spaceName = targetShelf.zoneName;
+    SessionManager.save(lineUid, cachedSession, 3600);
+
+    // 4. 動態生成 Web App 直達網址
+    const webAppStocktakeUrl = `${CONFIG.WEB_APP_URL}?mode=stocktake` +
+      `&cell=${encodeURIComponent(targetShelf.cellCode)}` +
+      `&uid=${encodeURIComponent(myUserId)}` +
+      `&name=${encodeURIComponent(myName)}` +
+      `&shelf=${encodeURIComponent(targetShelf.shelfName)}` +
+      `&box=${encodeURIComponent(targetShelf.boxName)}` +
+      `&space=${encodeURIComponent(targetShelf.zoneName)}`;
+
+    // 5. 回傳帶有直達按鈕的專屬卡片
+    replyFlexSearchPromptCard(replyToken, targetShelf.zoneName, targetShelf.boxName, targetShelf.shelfName, targetShelf.cellCode, false, webAppStocktakeUrl);
+  } catch (err) {
+    writeDebugLog("handleLineImageMessage 錯誤: " + err.message);
+    replyTextMessage(replyToken, "❌ 圖片辨識處理異常，請稍後重試。");
+  }
+}
+
+// ==================== 4. Session 管理工具 ====================
 const SessionManager = {
   get: function(userId) {
     const raw = CacheService.getUserCache().get(userId);
@@ -479,7 +675,7 @@ const SessionManager = {
   }
 };
 
-// ==================== 4. 狀態處理策略群 (State Handlers) ====================
+// ==================== 5. 狀態處理策略群 (State Handlers) ====================
 const StateHandlers = {
   [STATE.CHOOSE_SITE]: function(ctx) {
     const selectedSite = ctx.userMessage;
@@ -546,8 +742,12 @@ const StateHandlers = {
     ctx.session.zoneId = zoneId;
     ctx.session.zoneName = zoneName;
     SessionManager.save(ctx.lineUid, ctx.session); 
+
     const boxItems = boxes.map(b => ({ title: b.display_label, desc: `點擊進入 ${b.display_label}`, value: b.display_label }));
-    replyFlexMenuCard(ctx.replyToken, "🗃️ 選擇盤點櫃子", `已鎖定：【${zoneName}】\n請點選要盤點的【櫃子】：`, boxItems, `↩️ 返回 [${ctx.session.spaceName || "空間清單"}]`);
+    
+    // 🌟 空間鎖定提示：引導可直接拍照標籤直達
+    const promptDesc = `已鎖定：【${zoneName}】\n\n📸 推薦快拍：直接拍照傳送層板標籤（如 B3-S2）直達盤點！\n\n或點選下方按鈕手動選櫃：`;
+    replyFlexMenuCard(ctx.replyToken, "🗃️ 選擇盤點櫃子", promptDesc, boxItems, `↩️ 返回 [${ctx.session.spaceName || "空間清單"}]`);
   },
 
   [STATE.CHOOSE_BOX]: function(ctx) {
@@ -565,7 +765,7 @@ const StateHandlers = {
     ctx.session.boxName = selectedBoxStr;
     SessionManager.save(ctx.lineUid, ctx.session);
     const shelfItems = shelves.map(s => ({ title: `📍 ${s.name}`, desc: `格位：${s.short_code}`, value: s.cell_code }));
-    replyFlexMenuCard(ctx.replyToken, "🚪 選擇盤點層格", `已對齊櫃體：【${selectedBoxStr}】\n請點選具體【層格】：`, shelfItems, `↩️ 返回 [${ctx.session.zoneName || "櫃位分區"}]`);
+    replyFlexMenuCard(ctx.replyToken, "🚪 選擇盤點層格", `已對齊櫃體：【${selectedBoxStr}】\n📸 亦可直接拍照傳送層架標籤！\n或點選具體【層格】：`, shelfItems, `↩️ 返回 [${ctx.session.zoneName || "櫃位分區"}]`);
   },
 
   [STATE.CHOOSE_CELL]: function(ctx) {
@@ -682,7 +882,7 @@ const StateHandlers = {
   }
 };
 
-// ==================== 5. LINE 訊息路由分流入口 ====================
+// ==================== 6. LINE 訊息路由分流入口 ====================
 function handleLineMessage(event) {
   const replyToken = event.replyToken;
   const lineUid = event.source.userId; 
@@ -759,6 +959,34 @@ function handleLineMessage(event) {
   if (userMessage === '開始盤點' || userMessage === CMD.CHANGE_SITE) {
     startNewStocktake(replyToken, lineUid, myName);
     return;
+  }
+
+  // 🌟 若志工直接在文字框輸入標籤代碼（如輸入 B3-S2 或 B3S2）
+  const manualTagMatch = userMessage.match(/^B([1-6])[-_/\s]?[S5](\d)$/i);
+  if (manualTagMatch) {
+    const formattedTag = `B${manualTagMatch[1]}-S${manualTagMatch[2]}`.toUpperCase();
+    const targetShelf = findShelfByLabel(formattedTag, cachedSession ? cachedSession.zoneId : null);
+    if (targetShelf) {
+      const activeSession = cachedSession || {};
+      activeSession.state = STATE.INPUT_SKU;
+      activeSession.cellCode = targetShelf.cellCode;
+      activeSession.shelfName = targetShelf.shelfName;
+      activeSession.boxName = targetShelf.boxName;
+      activeSession.zoneId = targetShelf.zoneId;
+      activeSession.spaceName = targetShelf.zoneName;
+      SessionManager.save(lineUid, activeSession, 3600);
+
+      const webAppStocktakeUrl = `${CONFIG.WEB_APP_URL}?mode=stocktake` +
+        `&cell=${encodeURIComponent(targetShelf.cellCode)}` +
+        `&uid=${encodeURIComponent(myUserId)}` +
+        `&name=${encodeURIComponent(myName)}` +
+        `&shelf=${encodeURIComponent(targetShelf.shelfName)}` +
+        `&box=${encodeURIComponent(targetShelf.boxName)}` +
+        `&space=${encodeURIComponent(targetShelf.zoneName)}`;
+
+      replyFlexSearchPromptCard(replyToken, targetShelf.zoneName, targetShelf.boxName, targetShelf.shelfName, targetShelf.cellCode, false, webAppStocktakeUrl);
+      return;
+    }
   }
 
   if (!cachedSession) {
