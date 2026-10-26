@@ -2,6 +2,30 @@
  * 模組 2：主程式進入點、Web App RPC、LINE 狀態機與標籤視覺辨識 (2_Main.js)
  */
 
+// ==================== 全域安全變數存取器 ====================
+const CONFIG = {
+  get LINE_ACCESS_TOKEN() {
+    return (typeof LINE_ACCESS_TOKEN !== 'undefined' && LINE_ACCESS_TOKEN) || 
+           PropertiesService.getScriptProperties().getProperty('LINE_ACCESS_TOKEN') || '';
+  },
+  get GEMINI_API_KEY() {
+    return (typeof GEMINI_API_KEY !== 'undefined' && GEMINI_API_KEY) || 
+           PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY') || '';
+  },
+  get INBOUND_IMG_FOLDER_ID() {
+    return (typeof INBOUND_IMG_FOLDER_ID !== 'undefined' && INBOUND_IMG_FOLDER_ID) || 
+           PropertiesService.getScriptProperties().getProperty('INBOUND_IMG_FOLDER_ID') || '';
+  },
+  get WEB_APP_URL() {
+    return (typeof WEB_APP_URL !== 'undefined' && WEB_APP_URL) || 
+           PropertiesService.getScriptProperties().getProperty('WEB_APP_URL') || '';
+  },
+  get SPREADSHEET_ID() {
+    return (typeof SPREADSHEET_ID !== 'undefined' && SPREADSHEET_ID) || 
+           PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID') || '13J32Ewv0PVL8o6hEoJUCuK2Ur5pBEnHO90tdG7XxtC8';
+  }
+};
+
 // ==================== 1. Webhook 與網頁應用程式進入點 ====================
 function doPost(e) {
   if (!e || !e.postData || !e.postData.contents) return HtmlService.createHtmlOutput("OK");
@@ -460,19 +484,26 @@ function createSkuMasterItem(data) {
   }
 }
 
-// ==================== 3. 🌟 實體櫃位標籤視覺辨識核心 ====================
+// ==================== 3. 實體櫃位標籤視覺辨識核心 ====================
 
 /**
- * 從 LINE 取得使用者上傳的圖片二進位資料
+ * 從 LINE 取得使用者上傳的圖片二進位資料（已修復 Token 變數）
  */
 function fetchLineImageBlob(messageId) {
+  const token = CONFIG.LINE_ACCESS_TOKEN;
+  if (!token) {
+    throw new Error("系統未設定 LINE_ACCESS_TOKEN 指令碼屬性");
+  }
+
   const url = `https://api-data.line.me/v2/bot/message/${messageId}/content`;
   const response = UrlFetchApp.fetch(url, {
+    method: 'get',
     headers: {
-      'Authorization': 'Bearer ' + CONFIG.LINE_CHANNEL_ACCESS_TOKEN
+      'Authorization': 'Bearer ' + token
     },
     muteHttpExceptions: true
   });
+
   if (response.getResponseCode() !== 200) {
     throw new Error(`無法取得 LINE 圖片內容 (HTTP ${response.getResponseCode()})`);
   }
@@ -480,18 +511,19 @@ function fetchLineImageBlob(messageId) {
 }
 
 /**
- * 辨識層板上的手寫/印刷標籤（如 B3-S2、B4-S3），內建 S 與 5 強制筆跡校正
+ * 辨識層板上的手寫/印刷標籤（如 B3-S2、B6-S3），內建 S 與 5 強制筆跡校正
  */
 function recognizeShelfLabelFromPhoto(base64Data, mimeType) {
-  if (!CONFIG.GEMINI_API_KEY) return null;
+  const apiKey = CONFIG.GEMINI_API_KEY;
+  if (!apiKey) return null;
 
   const prompt = `你是一個精準的佛寺書架標籤辨識專家。請觀察這張照片，尋找貼在書架層板邊緣的白色手寫貼紙或標籤：
 標籤規則：
 1. 格式固定為「B」接櫃號數字、「-」連字號、接著是「S」接層號數字（例如：B1-S1 到 B6-S4）。
-2. ⚠️ 關鍵筆跡校正：手寫的英文字母「S」常被誤認成數字「5」（例如「B3-52」實際上是「B3-S2」、「B4-53」實際上是「B4-S3」）。請務必依規則校正為「S」。
+2. ⚠️ 關鍵筆跡校正：手寫的英文字母「S」常被誤認成數字「5」（例如「B3-52」實際上是「B3-S2」、「B4-53」實際上是「B4-S3」、「B6-53」實際上是「B6-S3」）。請務必依規則校正為「S」。
 
 若畫面中有此標籤貼紙，請只回傳標準 JSON：
-{"found": true, "code": "B3-S2"}
+{"found": true, "code": "B6-S3"}
 若完全找不到貼紙，請回傳：
 {"found": false, "code": ""}`;
 
@@ -505,7 +537,7 @@ function recognizeShelfLabelFromPhoto(base64Data, mimeType) {
     generationConfig: { responseMimeType: "application/json" }
   };
 
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent?key=${apiKey}`;
   try {
     const response = UrlFetchApp.fetch(endpoint, {
       method: "post",
@@ -521,7 +553,6 @@ function recognizeShelfLabelFromPhoto(base64Data, mimeType) {
         raw = raw.replace(/```json/gi, '').replace(/```/g, '').trim();
         const parsed = JSON.parse(raw);
         if (parsed.found && parsed.code) {
-          // 正則表示式二次防呆矯正：B[1-6]-[S5][1-4]
           const match = parsed.code.match(/B([1-6])[-_/\s]?[S5](\d)/i);
           if (match) {
             return `B${match[1]}-S${match[2]}`.toUpperCase();
@@ -537,7 +568,7 @@ function recognizeShelfLabelFromPhoto(base64Data, mimeType) {
 }
 
 /**
- * 依據標籤短碼（如 B3-S2）反查 SUB_ZONE_DETAIL 的 JSON 配置
+ * 依據標籤短碼（如 B6-S3）反查 SUB_ZONE_DETAIL 的 JSON 配置
  */
 function findShelfByLabel(shortCode, preferredZoneId) {
   return withSpreadsheet(ss => {
@@ -576,13 +607,14 @@ function checkJsonForShelf(jsonStr, shortCode, zoneId, zoneName) {
   if (!jsonStr) return null;
   try {
     const boxes = JSON.parse(jsonStr);
+    const cleanShort = shortCode.toUpperCase().replace(/\s+/g, "");
     for (const box of boxes) {
       if (!box.shelves) continue;
       for (const shelf of box.shelves) {
-        const cell = shelf.cell_code || "";
-        if (cell.toUpperCase().endsWith('#' + shortCode.toUpperCase()) || 
-            cell.toUpperCase().endsWith('-' + shortCode.toUpperCase()) ||
-            cell.toUpperCase() === shortCode.toUpperCase()) {
+        const cell = (shelf.cell_code || "").toUpperCase().replace(/\s+/g, "");
+        if (cell.endsWith('#' + cleanShort) || 
+            cell.endsWith('-' + cleanShort) ||
+            cell === cleanShort) {
           return {
             cellCode: shelf.cell_code,
             shelfName: shelf.name,
@@ -599,7 +631,83 @@ function checkJsonForShelf(jsonStr, shortCode, zoneId, zoneName) {
 }
 
 /**
- * 🌟 處理 LINE 圖片訊息：自動辨識櫃位標籤直達盤點
+ * 🌟 專屬直達圖卡：包含開啟相機盤點的大按鈕
+ */
+function replyFlexDirectStocktakeCard(replyToken, shelfInfo, webAppStocktakeUrl) {
+  const flexContents = {
+    "type": "bubble",
+    "header": {
+      "type": "box",
+      "layout": "vertical",
+      "backgroundColor": "#ECFDF5",
+      "contents": [
+        { "type": "text", "text": "🎯 櫃位標籤識別成功！", "weight": "bold", "size": "xl", "color": "#065F46" },
+        { "type": "text", "text": "已自動為您鎖定盤點格位", "size": "xs", "color": "#047857", "margin": "xs" }
+      ]
+    },
+    "body": {
+      "type": "box",
+      "layout": "vertical",
+      "contents": [
+        {
+          "type": "box",
+          "layout": "vertical",
+          "backgroundColor": "#F9FAFB",
+          "borderColor": "#16A34A",
+          "borderWidth": "1px",
+          "cornerRadius": "md",
+          "paddingAll": "md",
+          "contents": [
+            { "type": "text", "text": `🏢 ${shelfInfo.zoneName} ｜ ${shelfInfo.boxName}`, "size": "sm", "color": "#4B5563", "wrap": true },
+            { "type": "text", "text": `📍 ${shelfInfo.shelfName}`, "weight": "bold", "size": "lg", "color": "#15803D", "margin": "xs", "wrap": true },
+            { "type": "text", "text": `格位代碼：${shelfInfo.cellCode}`, "size": "xs", "color": "#9CA3AF", "margin": "xs" },
+            shelfInfo.defaultItem ? { "type": "text", "text": `📦 常態物資：${shelfInfo.defaultItem}`, "size": "xs", "color": "#B45309", "margin": "sm", "wrap": true } : null
+          ].filter(Boolean)
+        },
+        {
+          "type": "button",
+          "style": "primary",
+          "color": "#16A34A",
+          "height": "md",
+          "margin": "lg",
+          "action": {
+            "type": "uri",
+            "label": "📷 開啟相機 批次盤點本格物資",
+            "uri": webAppStocktakeUrl
+          }
+        }
+      ]
+    },
+    "footer": {
+      "type": "box",
+      "layout": "vertical",
+      "contents": [
+        {
+          "type": "button",
+          "style": "secondary",
+          "height": "sm",
+          "action": {
+            "type": "message",
+            "label": "🚪 結束盤點 (回主選單)",
+            "text": CMD_EXIT_STOCKTAKE
+          }
+        }
+      ]
+    }
+  };
+
+  sendToLine({
+    replyToken: replyToken,
+    messages: [{
+      "type": "flex",
+      "altText": `📍 已定位：${shelfInfo.shelfName}`,
+      "contents": flexContents
+    }]
+  });
+}
+
+/**
+ * 處理 LINE 圖片訊息：自動辨識櫃位標籤直達盤點
  */
 function handleLineImageMessage(event) {
   const replyToken = event.replyToken;
@@ -624,7 +732,7 @@ function handleLineImageMessage(event) {
     // 1. 辨識照片中的櫃位標籤
     const recognizedCode = recognizeShelfLabelFromPhoto(base64Data, mimeType);
     if (!recognizedCode) {
-      replyTextMessage(replyToken, "⚠️ 未能在照片中看清櫃位標籤貼紙（例如 B3-S2）。\n\n💡 請靠近一點、對焦清楚層板邊緣的白底手寫貼紙重新拍照！");
+      replyTextMessage(replyToken, "⚠️ 未能在照片中看清櫃位標籤貼紙（例如 B3-S2 或 B6-S3）。\n\n💡 請靠近一點、對焦清楚層板邊緣的白底手寫貼紙重新拍照！");
       return;
     }
 
@@ -653,8 +761,8 @@ function handleLineImageMessage(event) {
       `&box=${encodeURIComponent(targetShelf.boxName)}` +
       `&space=${encodeURIComponent(targetShelf.zoneName)}`;
 
-    // 5. 回傳帶有直達按鈕的專屬卡片
-    replyFlexSearchPromptCard(replyToken, targetShelf.zoneName, targetShelf.boxName, targetShelf.shelfName, targetShelf.cellCode, false, webAppStocktakeUrl);
+    // 5. 回傳直達按鈕專屬圖卡
+    replyFlexDirectStocktakeCard(replyToken, targetShelf, webAppStocktakeUrl);
   } catch (err) {
     writeDebugLog("handleLineImageMessage 錯誤: " + err.message);
     replyTextMessage(replyToken, "❌ 圖片辨識處理異常，請稍後重試。");
@@ -744,8 +852,6 @@ const StateHandlers = {
     SessionManager.save(ctx.lineUid, ctx.session); 
 
     const boxItems = boxes.map(b => ({ title: b.display_label, desc: `點擊進入 ${b.display_label}`, value: b.display_label }));
-    
-    // 🌟 空間鎖定提示：引導可直接拍照標籤直達
     const promptDesc = `已鎖定：【${zoneName}】\n\n📸 推薦快拍：直接拍照傳送層板標籤（如 B3-S2）直達盤點！\n\n或點選下方按鈕手動選櫃：`;
     replyFlexMenuCard(ctx.replyToken, "🗃️ 選擇盤點櫃子", promptDesc, boxItems, `↩️ 返回 [${ctx.session.spaceName || "空間清單"}]`);
   },
@@ -961,7 +1067,7 @@ function handleLineMessage(event) {
     return;
   }
 
-  // 🌟 若志工直接在文字框輸入標籤代碼（如輸入 B3-S2 或 B3S2）
+  // 若志工直接在文字框輸入標籤代碼（如輸入 B6-S3、B3-S2 或 B3S2）
   const manualTagMatch = userMessage.match(/^B([1-6])[-_/\s]?[S5](\d)$/i);
   if (manualTagMatch) {
     const formattedTag = `B${manualTagMatch[1]}-S${manualTagMatch[2]}`.toUpperCase();
@@ -984,7 +1090,7 @@ function handleLineMessage(event) {
         `&box=${encodeURIComponent(targetShelf.boxName)}` +
         `&space=${encodeURIComponent(targetShelf.zoneName)}`;
 
-      replyFlexSearchPromptCard(replyToken, targetShelf.zoneName, targetShelf.boxName, targetShelf.shelfName, targetShelf.cellCode, false, webAppStocktakeUrl);
+      replyFlexDirectStocktakeCard(replyToken, targetShelf, webAppStocktakeUrl);
       return;
     }
   }
