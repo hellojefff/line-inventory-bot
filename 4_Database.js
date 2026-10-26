@@ -111,8 +111,9 @@ function appendSkuMasterRecord(data) {
       throw new Error("SKU_MASTER 缺少必要欄位 (品項編號 / 物品名稱)");
     }
 
-    const normalizedTarget = normalizeTitle(cleanName);
+    // 🌟 條碼純數字防呆過濾
     const cleanTargetBarcode = data.barcode ? data.barcode.toString().replace(/[^0-9]/g, "") : "";
+    const normalizedTarget = normalizeTitle(cleanName);
 
     for (let i = 1; i < rows.length; i++) {
       const existingSkuId = rows[i][skuIdIdx] ? rows[i][skuIdIdx].toString().trim() : "";
@@ -143,6 +144,9 @@ function appendSkuMasterRecord(data) {
         }
         if (priceIdx !== undefined && !rows[i][priceIdx] && data.price) {
           sheet.getRange(i + 1, priceIdx + 1).setValue(data.price);
+        }
+        if (barcodeIdx !== undefined && !rows[i][barcodeIdx] && cleanTargetBarcode) {
+          sheet.getRange(i + 1, barcodeIdx + 1).setValue("'" + cleanTargetBarcode);
         }
 
         return {
@@ -178,7 +182,9 @@ function appendSkuMasterRecord(data) {
     newRow[itemNameIdx] = cleanName;
     if (specAuthorIdx !== undefined) newRow[specAuthorIdx] = data.author || data.spec || "";
     if (unitIdx !== undefined) newRow[unitIdx] = data.unit || "本";
-    if (barcodeIdx !== undefined) newRow[barcodeIdx] = data.barcode || "";
+    
+    // 🌟 強制純文字純數字寫入條碼
+    if (barcodeIdx !== undefined) newRow[barcodeIdx] = cleanTargetBarcode ? ("'" + cleanTargetBarcode) : "";
     if (imgIdx !== undefined) newRow[imgIdx] = data.imageUrl || "";
     if (innerImgIdx !== undefined) newRow[innerImgIdx] = data.innerImageUrl || "";
     
@@ -201,7 +207,7 @@ function appendSkuMasterRecord(data) {
 }
 
 /**
- * 🌟 盤點主檔即時更新：針對指定 skuId 補齊封面、內頁、出版社、版次、定價
+ * 🌟 盤點主檔即時更新：針對指定 skuId 補齊封面、內頁、出版社、版次、定價與純數字條碼
  */
 function updateSkuMetadataAndImages(skuId, updates) {
   if (!skuId || !updates) return false;
@@ -238,8 +244,11 @@ function updateSkuMetadataAndImages(skuId, updates) {
         if (updates.price && priceIdx !== undefined) {
           sheet.getRange(rowNum, priceIdx + 1).setValue(updates.price);
         }
-        if (updates.barcode && barcodeIdx !== undefined && !data[i][barcodeIdx]) {
-          sheet.getRange(rowNum, barcodeIdx + 1).setValue(updates.barcode);
+        if (updates.barcode && barcodeIdx !== undefined) {
+          const cleanBc = updates.barcode.toString().replace(/[^0-9]/g, "");
+          if (cleanBc) {
+            sheet.getRange(rowNum, barcodeIdx + 1).setValue("'" + cleanBc);
+          }
         }
         return true;
       }
@@ -269,7 +278,6 @@ function executeBatchStockWorkflow(userId, cellCode, items) {
       const nextLogId = 'LOG-' + String(startRow + idx).padStart(3, '0');
       logRows.push([nextLogId, timestamp, userId, cellCode, item.skuId, item.itemName, item.qty]);
 
-      // 🌟 若盤點項目帶有補拍的圖片或 CIP 欄位，順道同步 SKU_MASTER
       if (item.newCoverUrl || item.newInnerUrl || item.publisher || item.edition || item.price) {
         updateSkuMetadataAndImages(item.skuId, {
           coverUrl: item.newCoverUrl || "",
@@ -770,6 +778,7 @@ function findSKU(keyword, barcode = "", author = "") {
 
       let score = 0;
 
+      // 1. 純數字條碼精準命中
       if (cleanBarcode && barcodeVal && cleanBarcode === barcodeVal) {
         score += 100;
       }
@@ -838,7 +847,7 @@ function writeDebugLog(contents) {
 }
 
 /**
- * 🌟 高速批次工具：嚴格鎖定「大類代碼 H」且「有內頁圖片URL」且「缺三欄資料」的書籍回填
+ * 🌟 高速批次工具：鎖定「大類代碼 H」且「有內頁圖片URL」且「缺三欄資料」的書籍進行回填
  */
 function backfillBookMetadataFromImages() {
   const ss = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
