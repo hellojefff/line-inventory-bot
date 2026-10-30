@@ -76,11 +76,22 @@ function doGet(e) {
   const template = HtmlService.createTemplateFromFile('Index');
   const params = (e && e.parameter) ? e.parameter : {};
   
+  const cell = params.cell || '';
+  let shelf = params.shelf || '';
+  
+  // 🌟 自動截取實體層架短碼標籤（如 B2-S3、B5-S3），自動補齊到手機頁面徽章與標題中
+  if (cell && cell.includes('#')) {
+    const shortTag = cell.split('#')[1].trim();
+    if (shortTag && !shelf.includes(shortTag)) {
+      shelf = `[${shortTag}] ${shelf}`.trim();
+    }
+  }
+
   template.mode = params.mode || 'inbound';
-  template.cell = params.cell || '';
+  template.cell = cell;
   template.uid = params.uid || '';
   template.userName = params.name || '';
-  template.shelf = params.shelf || '';
+  template.shelf = shelf;
   template.box = params.box || '';
   template.space = params.space || '';
 
@@ -527,11 +538,11 @@ function recognizeShelfLabelFromPhoto(base64Data, mimeType) {
   const prompt = `你是一個精準的佛寺書架與儲位標籤辨識專家。請觀察這張照片，尋找貼在書架層板邊緣或抽屜上的白色手寫貼紙或標籤：
 標籤規則：
 1. 格式開頭必定為「B」接 1~2 位數字櫃號（例如 B1 到 B24）。
-2. 連字號「-」後方為層架「S」或抽屜「D」接數字（例如 B3-S2、B6-S3、B7-S1、B22-D1、B24-S2）。
-3. ⚠️ 關鍵筆跡校正：手寫英文字母「S」常被誤認成數字「5」（例如「B3-52」實際上是「B3-S2」、「B6-53」是「B6-S3」）。請務必依規則校正為「S」。
+2. 連字號「-」後方為層架「S」或抽屜「D」接數字（例如 B3-S2、B5-S3、B6-S3、B7-S1、B22-D1、B24-S2）。
+3. ⚠️ 關鍵筆跡校正：手寫英文字母「S」常被誤認成數字「5」（例如「B3-52」實際上是「B3-S2」、「B5-53」是「B5-S3」、「B6-53」是「B6-S3」）。請務必依規則校正為「S」。
 
 若畫面中有此標籤貼紙，請只回傳標準 JSON：
-{"found": true, "code": "B3-S2"}
+{"found": true, "code": "B5-S3"}
 若完全找不到貼紙，請回傳：
 {"found": false, "code": ""}`;
 
@@ -579,7 +590,7 @@ function recognizeShelfLabelFromPhoto(base64Data, mimeType) {
 }
 
 /**
- * 依據標籤短碼（如 B3-S2、B6-S3、B22-D1）反查 SUB_ZONE_DETAIL 的 JSON 配置
+ * 依據標籤短碼（如 B3-S2、B5-S3、B22-D1）反查 SUB_ZONE_DETAIL 的 JSON 配置
  */
 function findShelfByLabel(shortCode, preferredLocOrZoneId) {
   return withSpreadsheet(ss => {
@@ -591,7 +602,6 @@ function findShelfByLabel(shortCode, preferredLocOrZoneId) {
     const zoneNameIdx = colMap['儲位分區名稱'];
     const jsonIdx = colMap['實體層格微細配置'];
 
-    // 1. 若當前 Session 鎖定了特定場域空間（如小教室 DA-004），優先比對該空間底下的所有分區
     if (preferredLocOrZoneId) {
       for (let i = 1; i < data.length; i++) {
         const currentZoneId = data[i][zoneIdIdx] ? data[i][zoneIdIdx].toString().trim() : "";
@@ -602,7 +612,6 @@ function findShelfByLabel(shortCode, preferredLocOrZoneId) {
       }
     }
 
-    // 2. 全域尋找
     for (let i = 1; i < data.length; i++) {
       const zoneId = data[i][zoneIdIdx] ? data[i][zoneIdIdx].toString().trim() : "";
       const zoneName = data[i][zoneNameIdx] ? data[i][zoneNameIdx].toString().trim() : "";
@@ -667,16 +676,19 @@ function handleLineImageMessage(event) {
 
     const recognizedCode = recognizeShelfLabelFromPhoto(base64Data, mimeType);
     if (!recognizedCode) {
-      replyTextMessage(replyToken, "⚠️ 未能在照片中看清櫃位標籤貼紙（例如 B3-S2 或 B6-S3）。\n\n💡 請靠近一點、對焦清楚層板邊緣的白底手寫貼紙重新拍照！");
+      replyTextMessage(replyToken, "⚠️ 未能在照片中看清櫃位標籤貼紙（例如 B3-S2 或 B5-S3）。\n\n💡 請靠近一點、對焦清楚層板邊緣的白底手寫貼紙重新拍照！");
       return;
     }
 
-    // 優先以已選定的 locId 或 zoneId 鎖定檢索
     const targetShelf = findShelfByLabel(recognizedCode, cachedSession.locId || cachedSession.zoneId);
     if (!targetShelf) {
       replyTextMessage(replyToken, `⚠️ 辨識到標籤【${recognizedCode}】，但在系統層格配置中找不到對應儲位，請確認標籤文字是否正確。`);
       return;
     }
+
+    // 🌟 提取短碼標籤（如 B2-S3、B5-S3）
+    const shortTag = targetShelf.cellCode.includes('#') ? targetShelf.cellCode.split('#')[1].trim() : recognizedCode;
+    const displayShelf = `[${shortTag}] ${targetShelf.shelfName}`;
 
     cachedSession.state = STATE.INPUT_SKU;
     cachedSession.cellCode = targetShelf.cellCode;
@@ -691,11 +703,11 @@ function handleLineImageMessage(event) {
       `&cell=${encodeURIComponent(targetShelf.cellCode)}` +
       `&uid=${encodeURIComponent(myUserId)}` +
       `&name=${encodeURIComponent(myName)}` +
-      `&shelf=${encodeURIComponent(targetShelf.shelfName)}` +
+      `&shelf=${encodeURIComponent(displayShelf)}` +
       `&box=${encodeURIComponent(targetShelf.boxName)}` +
       `&space=${encodeURIComponent(targetShelf.zoneName)}`;
 
-    replyFlexSearchPromptCard(replyToken, targetShelf.zoneName, targetShelf.boxName, targetShelf.shelfName, targetShelf.cellCode, false, webAppStocktakeUrl);
+    replyFlexSearchPromptCard(replyToken, targetShelf.zoneName, targetShelf.boxName, `【${shortTag}】${targetShelf.shelfName}`, targetShelf.cellCode, false, webAppStocktakeUrl);
   } catch (err) {
     writeDebugLog("handleLineImageMessage 錯誤: " + err.message);
     replyTextMessage(replyToken, "❌ 圖片辨識處理異常，請稍後重試。");
@@ -767,8 +779,7 @@ const StateHandlers = {
     SessionManager.save(ctx.lineUid, ctx.session);
     const zoneItems = zones.map(z => ({ title: z.zone_name, desc: `${spaceName} - ${z.zone_name}`, value: z.zone_id }));
 
-    // 🌟 核心升級：鎖定小教室後，引導志工可直接拍照標籤直達！
-    const promptDesc = `已鎖定空間：【${spaceName}】！\n\n📸 極速盤點：直接對準眼前櫃架貼紙拍照（如 B3-S2、B7-S1、B22-D1）即可秒開盤點！\n\n亦可點選下方區域手動選櫃：`;
+    const promptDesc = `已鎖定空間：【${spaceName}】！\n\n📸 極速盤點：直接對準眼前櫃架貼紙拍照（如 B3-S2、B5-S3、B22-D1）即可秒開盤點！\n\n亦可點選下方區域手動選櫃：`;
     replyFlexMenuCard(ctx.replyToken, "🗄️ 選擇櫃位區域", promptDesc, zoneItems, `↩️ 返回 [${ctx.session.floorName || "樓層空間"}]`);
   },
 
@@ -788,7 +799,7 @@ const StateHandlers = {
     SessionManager.save(ctx.lineUid, ctx.session); 
 
     const boxItems = boxes.map(b => ({ title: b.display_label, desc: `點擊進入 ${b.display_label}`, value: b.display_label }));
-    const promptDesc = `已鎖定分區：【${zoneName}】\n\n📸 推薦快拍：直接拍照傳送層板標籤（如 B3-S2 或 B6-S3）直達盤點！\n\n或點選下方按鈕手動選櫃：`;
+    const promptDesc = `已鎖定分區：【${zoneName}】\n\n📸 推薦快拍：直接拍照傳送層板標籤（如 B3-S2 或 B5-S3）直達盤點！\n\n或點選下方按鈕手動選櫃：`;
     replyFlexMenuCard(ctx.replyToken, "🗃️ 選擇盤點櫃子", promptDesc, boxItems, `↩️ 返回 [${ctx.session.spaceName || "空間清單"}]`);
   },
 
@@ -806,7 +817,7 @@ const StateHandlers = {
     ctx.session.boxId = selectedBoxId;
     ctx.session.boxName = selectedBoxStr;
     SessionManager.save(ctx.lineUid, ctx.session);
-    const shelfItems = shelves.map(s => ({ title: `📍 ${s.name}`, desc: `格位：${s.short_code}`, value: s.cell_code }));
+    const shelfItems = shelves.map(s => ({ title: `📍 [${s.short_code}] ${s.name}`, desc: `格位：${s.short_code}`, value: s.cell_code }));
     replyFlexMenuCard(ctx.replyToken, "🚪 選擇盤點層格", `已對齊櫃體：【${selectedBoxStr}】\n📸 亦可直接拍照傳送層架標籤！\n或點選具體【層格】：`, shelfItems, `↩️ 返回 [${ctx.session.zoneName || "櫃位分區"}]`);
   },
 
@@ -816,13 +827,16 @@ const StateHandlers = {
     const matchedShelf = validShelves.find(s => s.cell_code.toUpperCase().trim() === cellCode);
     if (!matchedShelf) {
       if (validShelves.length > 0) {
-        const shelfItems = validShelves.map(s => ({ title: `📍 ${s.name}`, desc: `格位：${s.short_code}`, value: s.cell_code }));
+        const shelfItems = validShelves.map(s => ({ title: `📍 [${s.short_code}] ${s.name}`, desc: `格位：${s.short_code}`, value: s.cell_code }));
         replyFlexMenuCard(ctx.replyToken, "⚠️ 請重新點選", `未能識別層格，請點選下方大按鈕：`, shelfItems, `↩️ 返回 [${ctx.session.boxName || "櫃子清單"}]`);
       } else {
         replyTextMessage(ctx.replyToken, `❌ 系統狀態中斷，請重新輸入【開始盤點】。`);
       }
       return;
     }
+
+    const shortTag = cellCode.includes('#') ? cellCode.split('#')[1].trim() : cellCode;
+    const displayShelf = `[${shortTag}] ${matchedShelf.name}`;
 
     ctx.session.state = STATE.INPUT_SKU;
     ctx.session.cellCode = cellCode;
@@ -834,11 +848,11 @@ const StateHandlers = {
       `&cell=${encodeURIComponent(cellCode)}` +
       `&uid=${encodeURIComponent(ctx.userId)}` +
       `&name=${encodeURIComponent(ctx.userName)}` +
-      `&shelf=${encodeURIComponent(matchedShelf.name)}` +
+      `&shelf=${encodeURIComponent(displayShelf)}` +
       `&box=${encodeURIComponent(ctx.session.boxName || '')}` +
       `&space=${encodeURIComponent(ctx.session.spaceName || '')}`;
 
-    replyFlexSearchPromptCard(ctx.replyToken, ctx.session.spaceName, ctx.session.boxName, matchedShelf.name, cellCode, false, webAppStocktakeUrl);
+    replyFlexSearchPromptCard(ctx.replyToken, ctx.session.spaceName, ctx.session.boxName, `【${shortTag}】${matchedShelf.name}`, cellCode, false, webAppStocktakeUrl);
   },
 
   [STATE.INPUT_SKU]: function(ctx) {
@@ -970,7 +984,6 @@ function handleLineMessage(event) {
     return;
   }
 
-  // 相容常數字串與中文「結束盤點」
   const isExitCommand = (userMessage === '結束盤點') || 
                         (userMessage === 'CMD_EXIT_STOCKTAKE') || 
                         (typeof CMD_EXIT_STOCKTAKE !== 'undefined' && userMessage === CMD_EXIT_STOCKTAKE) ||
@@ -1010,7 +1023,7 @@ function handleLineMessage(event) {
     return;
   }
 
-  // 🌟 手動輸入標籤代碼（支援 B1~B24，層架 S 或抽屜 D，例如 B3-S2、B22-D1）
+  // 🌟 手動輸入標籤代碼（支援 B1~B24，層架 S 或抽屜 D，例如 B2-S3、B5-S3、B22-D1）
   const manualTagMatch = userMessage.match(/^B(\d{1,2})[-_/\s]?([SD5])(\d{1,2})$/i);
   if (manualTagMatch) {
     const boxNum = manualTagMatch[1];
@@ -1021,6 +1034,9 @@ function handleLineMessage(event) {
     const targetShelf = findShelfByLabel(formattedTag, cachedSession ? (cachedSession.locId || cachedSession.zoneId) : null);
     if (targetShelf) {
       const activeSession = cachedSession || {};
+      const shortTag = targetShelf.cellCode.includes('#') ? targetShelf.cellCode.split('#')[1].trim() : formattedTag;
+      const displayShelf = `[${shortTag}] ${targetShelf.shelfName}`;
+
       activeSession.state = STATE.INPUT_SKU;
       activeSession.cellCode = targetShelf.cellCode;
       activeSession.shelfName = targetShelf.shelfName;
@@ -1034,11 +1050,11 @@ function handleLineMessage(event) {
         `&cell=${encodeURIComponent(targetShelf.cellCode)}` +
         `&uid=${encodeURIComponent(myUserId)}` +
         `&name=${encodeURIComponent(myName)}` +
-        `&shelf=${encodeURIComponent(targetShelf.shelfName)}` +
+        `&shelf=${encodeURIComponent(displayShelf)}` +
         `&box=${encodeURIComponent(targetShelf.boxName)}` +
         `&space=${encodeURIComponent(targetShelf.zoneName)}`;
 
-      replyFlexSearchPromptCard(replyToken, targetShelf.zoneName, targetShelf.boxName, targetShelf.shelfName, targetShelf.cellCode, false, webAppStocktakeUrl);
+      replyFlexSearchPromptCard(replyToken, targetShelf.zoneName, targetShelf.boxName, `【${shortTag}】${targetShelf.shelfName}`, targetShelf.cellCode, false, webAppStocktakeUrl);
       return;
     }
   }
