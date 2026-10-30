@@ -2,27 +2,33 @@
  * 模組 2：主程式進入點、Web App RPC、LINE 狀態機與標籤視覺辨識 (2_Main.js)
  */
 
-// ==================== 全域配置與環境變數安全讀取 ====================
-var CONFIG = (typeof CONFIG !== 'undefined' && CONFIG) ? CONFIG : {};
-if (!CONFIG.SPREADSHEET_ID) {
-  CONFIG.SPREADSHEET_ID = (typeof SPREADSHEET_ID !== 'undefined' && SPREADSHEET_ID) || 
-    PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID') || '13J32Ewv0PVL8o6hEoJUCuK2Ur5pBEnHO90tdG7XxtC8';
+// ==================== 安全變數取值輔助工具 (不宣告 CONFIG，避免衝突) ====================
+function getLineAccessToken() {
+  try {
+    if (typeof CONFIG !== 'undefined' && CONFIG && CONFIG.LINE_ACCESS_TOKEN) return CONFIG.LINE_ACCESS_TOKEN;
+  } catch (e) {}
+  return PropertiesService.getScriptProperties().getProperty('LINE_ACCESS_TOKEN') || '';
 }
-if (!CONFIG.LINE_ACCESS_TOKEN) {
-  CONFIG.LINE_ACCESS_TOKEN = (typeof LINE_ACCESS_TOKEN !== 'undefined' && LINE_ACCESS_TOKEN) || 
-    PropertiesService.getScriptProperties().getProperty('LINE_ACCESS_TOKEN') || '';
+
+function getGeminiApiKey() {
+  try {
+    if (typeof CONFIG !== 'undefined' && CONFIG && CONFIG.GEMINI_API_KEY) return CONFIG.GEMINI_API_KEY;
+  } catch (e) {}
+  return PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY') || '';
 }
-if (!CONFIG.GEMINI_API_KEY) {
-  CONFIG.GEMINI_API_KEY = (typeof GEMINI_API_KEY !== 'undefined' && GEMINI_API_KEY) || 
-    PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY') || '';
+
+function getInboundFolderId() {
+  try {
+    if (typeof CONFIG !== 'undefined' && CONFIG && CONFIG.INBOUND_IMG_FOLDER_ID) return CONFIG.INBOUND_IMG_FOLDER_ID;
+  } catch (e) {}
+  return PropertiesService.getScriptProperties().getProperty('INBOUND_IMG_FOLDER_ID') || '';
 }
-if (!CONFIG.INBOUND_IMG_FOLDER_ID) {
-  CONFIG.INBOUND_IMG_FOLDER_ID = (typeof INBOUND_IMG_FOLDER_ID !== 'undefined' && INBOUND_IMG_FOLDER_ID) || 
-    PropertiesService.getScriptProperties().getProperty('INBOUND_IMG_FOLDER_ID') || '';
-}
-if (!CONFIG.WEB_APP_URL) {
-  CONFIG.WEB_APP_URL = (typeof WEB_APP_URL !== 'undefined' && WEB_APP_URL) || 
-    PropertiesService.getScriptProperties().getProperty('WEB_APP_URL') || '';
+
+function getWebAppUrl() {
+  try {
+    if (typeof CONFIG !== 'undefined' && CONFIG && CONFIG.WEB_APP_URL) return CONFIG.WEB_APP_URL;
+  } catch (e) {}
+  return PropertiesService.getScriptProperties().getProperty('WEB_APP_URL') || '';
 }
 
 // ==================== 1. Web App (doGet) 與 Webhook (doPost) 進入點 ====================
@@ -149,8 +155,9 @@ function searchSkuCandidates(keyword) {
 
 function uploadStocktakeCover(skuId, base64Data, mimeType) {
   try {
-    if (!CONFIG.INBOUND_IMG_FOLDER_ID) throw new Error("未設定 INBOUND_IMG_FOLDER_ID");
-    const folder = DriveApp.getFolderById(CONFIG.INBOUND_IMG_FOLDER_ID);
+    const folderId = getInboundFolderId();
+    if (!folderId) throw new Error("未設定 INBOUND_IMG_FOLDER_ID");
+    const folder = DriveApp.getFolderById(folderId);
     const timestampStr = Utilities.formatDate(new Date(), "GMT+8", "yyyyMMdd_HHmmss");
 
     const coverBlob = Utilities.newBlob(Utilities.base64Decode(base64Data), mimeType || "image/jpeg", `COVER_${skuId}_${timestampStr}.jpg`);
@@ -169,8 +176,9 @@ function uploadStocktakeCover(skuId, base64Data, mimeType) {
 
 function uploadAndAnalyzeSingleCipForStocktake(skuId, base64Data, mimeType) {
   try {
-    if (!CONFIG.INBOUND_IMG_FOLDER_ID) throw new Error("未設定 INBOUND_IMG_FOLDER_ID");
-    const folder = DriveApp.getFolderById(CONFIG.INBOUND_IMG_FOLDER_ID);
+    const folderId = getInboundFolderId();
+    if (!folderId) throw new Error("未設定 INBOUND_IMG_FOLDER_ID");
+    const folder = DriveApp.getFolderById(folderId);
     const timestampStr = Utilities.formatDate(new Date(), "GMT+8", "yyyyMMdd_HHmmss");
 
     const innerBlob = Utilities.newBlob(Utilities.base64Decode(base64Data), mimeType || "image/jpeg", `CIP_${skuId}_${timestampStr}.jpg`);
@@ -198,7 +206,8 @@ function uploadAndAnalyzeSingleCipForStocktake(skuId, base64Data, mimeType) {
       generationConfig: { responseMimeType: "application/json" }
     };
 
-    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
+    const apiKey = getGeminiApiKey();
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent?key=${apiKey}`;
     const response = UrlFetchApp.fetch(endpoint, {
       method: "post",
       contentType: "application/json",
@@ -241,11 +250,12 @@ function uploadAndAnalyzeSingleCipForStocktake(skuId, base64Data, mimeType) {
 
 function uploadAndAnalyzeDualImages(coverBase64, innerBase64, mimeType) {
   try {
-    if (!CONFIG.INBOUND_IMG_FOLDER_ID) {
+    const folderId = getInboundFolderId();
+    if (!folderId) {
       throw new Error("系統未設定 INBOUND_IMG_FOLDER_ID 指令碼屬性");
     }
 
-    const folder = DriveApp.getFolderById(CONFIG.INBOUND_IMG_FOLDER_ID);
+    const folder = DriveApp.getFolderById(folderId);
     const timestampStr = Utilities.formatDate(new Date(), "GMT+8", "yyyyMMdd_HHmmss");
 
     let coverUrl = "";
@@ -288,7 +298,8 @@ function uploadAndAnalyzeDualImages(coverBase64, innerBase64, mimeType) {
 }
 
 function callGeminiDualImageRecognition(coverBase64, innerBase64, mimeType) {
-  if (!CONFIG.GEMINI_API_KEY) {
+  const apiKey = getGeminiApiKey();
+  if (!apiKey) {
     return { itemName: "", author: "", barcode: "", category: "出版品與佛藝書籍", publisher: "", edition: "", price: "" };
   }
 
@@ -328,7 +339,7 @@ ${innerBase64 ? '- 第二張影像：書籍【版權頁 / 內頁 CIP 國家圖�
   };
 
   for (const model of candidateModels) {
-    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
     try {
       const response = UrlFetchApp.fetch(endpoint, options);
       if (response.getResponseCode() === 200) {
@@ -353,7 +364,8 @@ function uploadAndAnalyzeImage(base64Data, mimeType) {
 
 function analyzeStocktakePhoto(base64Data, mimeType) {
   try {
-    if (!CONFIG.GEMINI_API_KEY) {
+    const apiKey = getGeminiApiKey();
+    if (!apiKey) {
       throw new Error("未設定 GEMINI_API_KEY");
     }
 
@@ -409,6 +421,7 @@ function analyzeStocktakePhoto(base64Data, mimeType) {
 }
 
 function callGeminiMultiItemRecognition(base64Data, mimeType) {
+  const apiKey = getGeminiApiKey();
   const candidateModels = ["gemini-flash-lite-latest", "gemini-3.5-flash-lite", "gemini-3.8-flash"];
 
   const prompt = `你是一個專業的圖書與佛寺物資盤點助理。請觀察這張照片，辨識畫面中出現的所有書籍或物品：
@@ -441,7 +454,7 @@ function callGeminiMultiItemRecognition(base64Data, mimeType) {
   };
 
   for (const model of candidateModels) {
-    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
     try {
       const response = UrlFetchApp.fetch(endpoint, options);
       if (response.getResponseCode() === 200) {
@@ -496,7 +509,8 @@ function createSkuMasterItem(data) {
 // ==================== 3. 實體櫃位標籤視覺辨識核心 ====================
 
 function fetchLineImageBlob(messageId) {
-  if (!CONFIG.LINE_ACCESS_TOKEN) {
+  const token = getLineAccessToken();
+  if (!token) {
     throw new Error("系統未設定 LINE_ACCESS_TOKEN 指令碼屬性");
   }
 
@@ -504,7 +518,7 @@ function fetchLineImageBlob(messageId) {
   const response = UrlFetchApp.fetch(url, {
     method: 'get',
     headers: {
-      'Authorization': 'Bearer ' + CONFIG.LINE_ACCESS_TOKEN
+      'Authorization': 'Bearer ' + token
     },
     muteHttpExceptions: true
   });
@@ -516,7 +530,8 @@ function fetchLineImageBlob(messageId) {
 }
 
 function recognizeShelfLabelFromPhoto(base64Data, mimeType) {
-  if (!CONFIG.GEMINI_API_KEY) return null;
+  const apiKey = getGeminiApiKey();
+  if (!apiKey) return null;
 
   const prompt = `你是一個精準的佛寺書架與儲位標籤辨識專家。請觀察這張照片，尋找貼在書架層板邊緣或抽屜上的白色手寫貼紙或標籤：
 標籤規則：
@@ -539,7 +554,7 @@ function recognizeShelfLabelFromPhoto(base64Data, mimeType) {
     generationConfig: { responseMimeType: "application/json" }
   };
 
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent?key=${apiKey}`;
   try {
     const response = UrlFetchApp.fetch(endpoint, {
       method: "post",
@@ -666,7 +681,7 @@ function handleLineImageMessage(event) {
     const shortTag = targetShelf.cellCode.includes('#') ? targetShelf.cellCode.split('#')[1].trim() : recognizedCode;
     const displayShelf = `[${shortTag}] ${targetShelf.shelfName}`;
 
-    cachedSession.state = 'STATE_INPUT_SKU';
+    cachedSession.state = STATE.INPUT_SKU;
     cachedSession.cellCode = targetShelf.cellCode;
     cachedSession.shelfName = targetShelf.shelfName;
     cachedSession.boxName = targetShelf.boxName;
@@ -674,7 +689,7 @@ function handleLineImageMessage(event) {
     cachedSession.spaceName = targetShelf.zoneName;
     SessionManager.save(lineUid, cachedSession, 3600);
 
-    const webAppBase = CONFIG.WEB_APP_URL;
+    const webAppBase = getWebAppUrl();
     const webAppStocktakeUrl = `${webAppBase}?mode=stocktake` +
       `&cell=${encodeURIComponent(targetShelf.cellCode)}` +
       `&uid=${encodeURIComponent(myUserId)}` +
@@ -704,9 +719,9 @@ const SessionManager = {
   }
 };
 
-// ==================== 5. 狀態處理策略群 (使用純字串 Key，避免 ReferenceError) ====================
+// ==================== 5. 狀態處理策略群 ====================
 const StateHandlers = {
-  'STATE_CHOOSE_SITE': function(ctx) {
+  [STATE.CHOOSE_SITE]: function(ctx) {
     const selectedSite = ctx.userMessage;
     const floors = getFloorsBySite(selectedSite);
     if (floors.length === 0) {
@@ -715,14 +730,14 @@ const StateHandlers = {
       replyFlexMenuCard(ctx.replyToken, "⚠️ 查無樓層", `找不到「${selectedSite}」底下的樓層配置，請重新選擇據點：`, menuItems, null);
       return;
     }
-    ctx.session.state = 'STATE_CHOOSE_FLOOR';
+    ctx.session.state = STATE.CHOOSE_FLOOR;
     ctx.session.siteName = selectedSite;
     SessionManager.save(ctx.lineUid, ctx.session);
     const floorItems = floors.map(f => ({ title: f, desc: `${selectedSite} ${f}`, value: f }));
     replyFlexMenuCard(ctx.replyToken, "🏛️ 選擇所在樓層", `已選擇據點：${selectedSite}\n請點選所在【樓層】：`, floorItems, `↩️ 返回 [選擇據點]`);
   },
 
-  'STATE_CHOOSE_FLOOR': function(ctx) {
+  [STATE.CHOOSE_FLOOR]: function(ctx) {
     const selectedFloor = ctx.userMessage;
     const details = getDetailsBySiteAndFloor(ctx.session.siteName, selectedFloor);
     if (details.length === 0) {
@@ -731,14 +746,14 @@ const StateHandlers = {
       replyFlexMenuCard(ctx.replyToken, "⚠️ 查無空間", `找不到「${ctx.session.siteName} ${selectedFloor}」的空間配置，請重新選擇樓層：`, floorItems, `↩️ 返回 [選擇據點]`);
       return;
     }
-    ctx.session.state = 'STATE_CHOOSE_LOC';
+    ctx.session.state = STATE.CHOOSE_LOC;
     ctx.session.floorName = selectedFloor;
     SessionManager.save(ctx.lineUid, ctx.session);
     const spaceItems = details.map(d => ({ title: d.space_name, desc: `${ctx.session.siteName} ${selectedFloor} - ${d.space_name}`, value: d.loc_id }));
     replyFlexMenuCard(ctx.replyToken, "🏢 選擇具體空間", `已選擇：${ctx.session.siteName} ${selectedFloor}\n請點選具體【空間/展示區】：`, spaceItems, `↩️ 返回 [${ctx.session.siteName} 樓層]`);
   },
 
-  'STATE_CHOOSE_LOC': function(ctx) {
+  [STATE.CHOOSE_LOC]: function(ctx) {
     const locId = ctx.userMessage.toUpperCase();
     const zones = getZonesByLocation(locId); 
     const currentLocInfo = getLocationInfoById(locId);
@@ -749,7 +764,7 @@ const StateHandlers = {
       replyFlexMenuCard(ctx.replyToken, "⚠️ 查無櫃位", `找不到「${spaceName}」下的櫃位明細。請重新點選：`, spaceItems, `↩️ 返回 [${ctx.session.siteName} 樓層]`);
       return;
     }
-    ctx.session.state = 'STATE_CHOOSE_ZONE';
+    ctx.session.state = STATE.CHOOSE_ZONE;
     ctx.session.locId = locId;
     ctx.session.spaceName = spaceName;
     SessionManager.save(ctx.lineUid, ctx.session);
@@ -759,7 +774,7 @@ const StateHandlers = {
     replyFlexMenuCard(ctx.replyToken, "🗄️ 選擇櫃位區域", promptDesc, zoneItems, `↩️ 返回 [${ctx.session.floorName || "樓層空間"}]`);
   },
 
-  'STATE_CHOOSE_ZONE': function(ctx) {
+  [STATE.CHOOSE_ZONE]: function(ctx) {
     const zoneId = ctx.userMessage.toUpperCase();
     const boxes = parseBoxesFromZone(zoneId); 
     const zoneName = getZoneNameById(zoneId);
@@ -769,7 +784,7 @@ const StateHandlers = {
       replyFlexMenuCard(ctx.replyToken, "❌ 查無櫃子", `找不到「${zoneName}」的空間配置。請重新點選：`, zoneItems, `↩️ 返回 [${ctx.session.spaceName || "空間清單"}]`);
       return;
     }
-    ctx.session.state = 'STATE_CHOOSE_BOX';
+    ctx.session.state = STATE.CHOOSE_BOX;
     ctx.session.zoneId = zoneId;
     ctx.session.zoneName = zoneName;
     SessionManager.save(ctx.lineUid, ctx.session); 
@@ -779,7 +794,7 @@ const StateHandlers = {
     replyFlexMenuCard(ctx.replyToken, "🗃️ 選擇盤點櫃子", promptDesc, boxItems, `↩️ 返回 [${ctx.session.spaceName || "空間清單"}]`);
   },
 
-  'STATE_CHOOSE_BOX': function(ctx) {
+  [STATE.CHOOSE_BOX]: function(ctx) {
     const selectedBoxStr = ctx.userMessage;
     const selectedBoxId = selectedBoxStr.split('-')[0].toUpperCase().trim();
     const shelves = parseShelvesFromBox(ctx.session.zoneId, selectedBoxId); 
@@ -789,7 +804,7 @@ const StateHandlers = {
       replyFlexMenuCard(ctx.replyToken, "❌ 查無層格", `找不到該櫃子配置，請重新選擇櫃子：`, boxItems, `↩️ 返回 [${ctx.session.zoneName || "櫃位分區"}]`);
       return;
     }
-    ctx.session.state = 'STATE_CHOOSE_CELL';
+    ctx.session.state = STATE.CHOOSE_CELL;
     ctx.session.boxId = selectedBoxId;
     ctx.session.boxName = selectedBoxStr;
     SessionManager.save(ctx.lineUid, ctx.session);
@@ -797,7 +812,7 @@ const StateHandlers = {
     replyFlexMenuCard(ctx.replyToken, "🚪 選擇盤點層格", `已對齊櫃體：【${selectedBoxStr}】\n📸 亦可直接拍照傳送層架標籤！\n或點選具體【層格】：`, shelfItems, `↩️ 返回 [${ctx.session.zoneName || "櫃位分區"}]`);
   },
 
-  'STATE_CHOOSE_CELL': function(ctx) {
+  [STATE.CHOOSE_CELL]: function(ctx) {
     const cellCode = ctx.userMessage.toUpperCase().trim();
     const validShelves = parseShelvesFromBox(ctx.session.zoneId, ctx.session.boxId);
     const matchedShelf = validShelves.find(s => s.cell_code.toUpperCase().trim() === cellCode);
@@ -814,12 +829,12 @@ const StateHandlers = {
     const shortTag = cellCode.includes('#') ? cellCode.split('#')[1].trim() : cellCode;
     const displayShelf = `[${shortTag}] ${matchedShelf.name}`;
 
-    ctx.session.state = 'STATE_INPUT_SKU';
+    ctx.session.state = STATE.INPUT_SKU;
     ctx.session.cellCode = cellCode;
     ctx.session.shelfName = matchedShelf.name;
     SessionManager.save(ctx.lineUid, ctx.session);
 
-    const webAppBase = CONFIG.WEB_APP_URL;
+    const webAppBase = getWebAppUrl();
     const webAppStocktakeUrl = `${webAppBase}?mode=stocktake` +
       `&cell=${encodeURIComponent(cellCode)}` +
       `&uid=${encodeURIComponent(ctx.userId)}` +
@@ -831,7 +846,7 @@ const StateHandlers = {
     replyFlexSearchPromptCard(ctx.replyToken, ctx.session.spaceName, ctx.session.boxName, `【${shortTag}】${matchedShelf.name}`, cellCode, false, webAppStocktakeUrl);
   },
 
-  'STATE_INPUT_SKU': function(ctx) {
+  [STATE.INPUT_SKU]: function(ctx) {
     const skus = findSKU(ctx.userMessage);
     ctx.session.pendingItemName = ctx.userMessage;
 
@@ -847,7 +862,7 @@ const StateHandlers = {
     }
 
     const targetSku = skus[0];
-    ctx.session.state = 'STATE_INPUT_QTY';
+    ctx.session.state = STATE.INPUT_QTY;
     ctx.session.skuId = (targetSku['品項編號'] || targetSku['sku_id'] || targetSku['SKU_ID'] || '').toString();
     ctx.session.itemName = (targetSku['物品名稱'] || targetSku['品名'] || targetSku['name'] || '').toString();
     SessionManager.save(ctx.lineUid, ctx.session);
@@ -855,7 +870,7 @@ const StateHandlers = {
     replyFlexConfirmSingleSkuCard(ctx.replyToken, targetSku, ctx.userName);
   },
 
-  'STATE_INPUT_QTY': function(ctx) {
+  [STATE.INPUT_QTY]: function(ctx) {
     if (ctx.userMessage === ctx.session.skuId) {
       replyTextMessage(ctx.replyToken, `請在對話框中直接輸入本次盤點的【實清數量】數字（例如：5）：`);
       return;
@@ -869,7 +884,7 @@ const StateHandlers = {
     
     const success = executeUpdateStockWorkflow(ctx.userId, ctx.session.cellCode, ctx.session.skuId, ctx.session.itemName, qty);
     if (success) {
-      ctx.session.state = 'STATE_POST_STOCKTAKE';
+      ctx.session.state = STATE.POST_STOCKTAKE;
       ctx.session.lastSkuId = ctx.session.skuId;
       ctx.session.lastItemName = ctx.session.itemName;
       ctx.session.lastQty = qty;
@@ -882,19 +897,19 @@ const StateHandlers = {
     }
   },
 
-  'STATE_CORRECT_ITEM_NAME': function(ctx) {
+  [STATE.CORRECT_ITEM_NAME]: function(ctx) {
     const newCorrectName = ctx.userMessage;
     correctLastItemName(ctx.session.lastSkuId, newCorrectName, ctx.session.cellCode);
     ctx.session.lastItemName = newCorrectName;
     ctx.session.itemName = newCorrectName;
-    ctx.session.state = 'STATE_POST_STOCKTAKE';
+    ctx.session.state = STATE.POST_STOCKTAKE;
     SessionManager.save(ctx.lineUid, ctx.session, 1800);
 
     const locTextName = `${ctx.session.siteName || ""} ${ctx.session.floorName || ""} ${ctx.session.spaceName || ""} - ${ctx.session.boxName || ""} (${ctx.session.shelfName || ""})`;
     replyCorrectionSuccessWithMonk(ctx.replyToken, ctx.userName, locTextName, ctx.session.cellCode, newCorrectName, ctx.session.lastQty, ctx.session.boxName, `品項名稱已更新為【${newCorrectName}】！`);
   },
 
-  'STATE_CORRECT_QTY': function(ctx) {
+  [STATE.CORRECT_QTY]: function(ctx) {
     const newCorrectQty = parseInt(ctx.userMessage, 10);
     if (isNaN(newCorrectQty) || newCorrectQty < 0) {
       replyTextMessage(ctx.replyToken, "❌ 請輸入大於或等於 0 的有效數量數字：");
@@ -903,14 +918,14 @@ const StateHandlers = {
 
     correctLastQty(ctx.session.cellCode, ctx.session.lastSkuId, newCorrectQty);
     ctx.session.lastQty = newCorrectQty;
-    ctx.session.state = 'STATE_POST_STOCKTAKE';
+    ctx.session.state = STATE.POST_STOCKTAKE;
     SessionManager.save(ctx.lineUid, ctx.session, 1800);
 
     const locTextQty = `${ctx.session.siteName || ""} ${ctx.session.floorName || ""} ${ctx.session.spaceName || ""} - ${ctx.session.boxName || ""} (${ctx.session.shelfName || ""})`;
     replyCorrectionSuccessWithMonk(ctx.replyToken, ctx.userName, locTextQty, ctx.session.cellCode, newCorrectQty, ctx.session.boxName, `實清數量已更正為【${newCorrectQty} 本/套】！`);
   },
 
-  'STATE_POST_STOCKTAKE': function(ctx) {
+  [STATE.POST_STOCKTAKE]: function(ctx) {
     handleSystemCommand(ctx.replyToken, ctx.lineUid, ctx.session, ctx.userMessage, ctx.userName);
   }
 };
@@ -926,21 +941,21 @@ function handleLineMessage(event) {
   
   if (!currentVolunteer) {
     if (cachedSession) {
-      if (cachedSession.state === 'STATE_BINDING_NAME') {
-        cachedSession.state = 'STATE_BINDING_PHONE';
+      if (cachedSession.state === STATE.BINDING_NAME) {
+        cachedSession.state = STATE.BINDING_PHONE;
         cachedSession.inputName = userMessage; 
         SessionManager.save(lineUid, cachedSession);
         replyTextMessage(replyToken, `📝 已收到姓名：${userMessage}\n\n第二步：請輸入您在建檔時登記的【手機號碼】末 4 碼（或完整 10 碼）進行身份比對：`);
         return;
       }
       
-      if (cachedSession.state === 'STATE_BINDING_PHONE') {
+      if (cachedSession.state === STATE.BINDING_PHONE) {
         processDualBinding(replyToken, lineUid, cachedSession.inputName, userMessage);
         return;
       }
     }
     
-    SessionManager.save(lineUid, { state: 'STATE_BINDING_NAME' }); 
+    SessionManager.save(lineUid, { state: STATE.BINDING_NAME }); 
     replyTextMessage(replyToken, "🙏 您好！歡迎使用「覺風物資管理系統」。\n\n為確保物資紀錄正確，請先進行志工身份認證。\n\n第一步：請輸入您的【人員姓名】：");
     return;
   }
@@ -962,7 +977,7 @@ function handleLineMessage(event) {
 
   const isExitCommand = (userMessage === '結束盤點') || 
                         (userMessage === 'CMD_EXIT_STOCKTAKE') || 
-                        (typeof CMD_EXIT_STOCKTAKE !== 'undefined' && userMessage === CMD_EXIT_STOCKTAKE);
+                        (typeof CMD !== 'undefined' && CMD.EXIT_STOCKTAKE && userMessage === CMD.EXIT_STOCKTAKE);
 
   if (isExitCommand) {
     SessionManager.clear(lineUid);
@@ -970,12 +985,12 @@ function handleLineMessage(event) {
     return;
   }
 
-  if (userMessage === '拍照入庫' || (typeof CMD_TRIGGER_PHOTO_INBOUND !== 'undefined' && userMessage === CMD_TRIGGER_PHOTO_INBOUND)) {
+  if (userMessage === '拍照入庫' || (typeof CMD !== 'undefined' && CMD.TRIGGER_PHOTO_INBOUND && userMessage === CMD.TRIGGER_PHOTO_INBOUND)) {
     replyFlexInboundPromptCard(replyToken, myName);
     return;
   }
 
-  if (userMessage.startsWith('↩️ 返回') || (typeof BTN_BACK_PREFIX !== 'undefined' && userMessage.startsWith(BTN_BACK_PREFIX))) {
+  if (userMessage.startsWith('↩️ 返回') || (typeof UI !== 'undefined' && UI.BTN_BACK_PREFIX && userMessage.startsWith(UI.BTN_BACK_PREFIX))) {
     if (cachedSession) {
       handleGoBack(replyToken, lineUid, cachedSession, myName);
     } else {
@@ -993,7 +1008,7 @@ function handleLineMessage(event) {
     return;
   }
 
-  if (userMessage === '開始盤點' || (typeof CMD_CHANGE_SITE !== 'undefined' && userMessage === CMD_CHANGE_SITE)) {
+  if (userMessage === '開始盤點' || (typeof CMD !== 'undefined' && CMD.CHANGE_SITE && userMessage === CMD.CHANGE_SITE)) {
     startNewStocktake(replyToken, lineUid, myName);
     return;
   }
@@ -1012,7 +1027,7 @@ function handleLineMessage(event) {
       const shortTag = targetShelf.cellCode.includes('#') ? targetShelf.cellCode.split('#')[1].trim() : formattedTag;
       const displayShelf = `[${shortTag}] ${targetShelf.shelfName}`;
 
-      activeSession.state = 'STATE_INPUT_SKU';
+      activeSession.state = STATE.INPUT_SKU;
       activeSession.cellCode = targetShelf.cellCode;
       activeSession.shelfName = targetShelf.shelfName;
       activeSession.boxName = targetShelf.boxName;
@@ -1020,7 +1035,7 @@ function handleLineMessage(event) {
       activeSession.spaceName = targetShelf.zoneName;
       SessionManager.save(lineUid, activeSession, 3600);
 
-      const webAppBase = CONFIG.WEB_APP_URL;
+      const webAppBase = getWebAppUrl();
       const webAppStocktakeUrl = `${webAppBase}?mode=stocktake` +
         `&cell=${encodeURIComponent(targetShelf.cellCode)}` +
         `&uid=${encodeURIComponent(myUserId)}` +
@@ -1066,7 +1081,7 @@ function startNewStocktake(replyToken, lineUid, myName) {
     replyTextMessage(replyToken, `⚠️ 系統後台 LOC_MASTER 尚未設定任何據點，請先聯繫管理員建檔。`);
     return;
   }
-  SessionManager.save(lineUid, { state: 'STATE_CHOOSE_SITE' });
+  SessionManager.save(lineUid, { state: STATE.CHOOSE_SITE });
   const menuItems = sites.map(site => ({ title: site, desc: "點擊進入此據點", value: site }));
   replyFlexMenuCard(replyToken, "🙏 選擇盤點據點", `${myName} 您好，請點選您所在的【據點】：`, menuItems, null);
 }
