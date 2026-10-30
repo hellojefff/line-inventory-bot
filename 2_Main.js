@@ -1,8 +1,8 @@
 /**
- * 模組 2：主程式進入點、Web App RPC、LINE 狀態機與標籤視覺辨識 (2_Main.js)
+ * 模組 2：主程式進入點、Web App RPC、LINE 狀態機與極速盤點導航流程 (2_Main.js)
  */
 
-// ==================== 安全變數取值輔助工具 ====================
+// ==================== 安全變數取值輔助工具 (避免全域宣告衝突) ====================
 function getLineAccessToken() {
   try {
     if (typeof CONFIG !== 'undefined' && CONFIG && CONFIG.LINE_ACCESS_TOKEN) return CONFIG.LINE_ACCESS_TOKEN;
@@ -41,7 +41,7 @@ function doGet(e) {
   let space = params.space || '';
   let box = params.box || '';
 
-  // 1. 提取短碼標籤（如 B3-S1、B2-S3）
+  // 1. 提取短碼標籤（如 B3-S1、B2-S3、B5-S3）
   let shortTag = '';
   if (cell && cell.includes('#')) {
     shortTag = cell.split('#')[1].trim();
@@ -52,7 +52,6 @@ function doGet(e) {
   if (space) {
     locName = space.split('-')[0].trim();
   }
-  // 智慧辨識保底：若無帶入空間名稱，依 cellCode 代碼前綴自動配對
   if (!locName || (!locName.includes('小教室') && cell.startsWith('DA-004'))) {
     locName = '大安覺風 地下1樓 小教室';
   } else if (!locName && cell.startsWith('DA-009')) {
@@ -68,7 +67,7 @@ function doGet(e) {
       .trim();
   }
 
-  // 4. 🌟 組裝「零思考」直覺定位標籤：[B3-S1] 大安覺風 地下1樓 小教室 ｜ 第3櫃-第1層(上)
+  // 4. 組裝「零思考」直覺定位標籤：[B3-S1] 大安覺風 地下1樓 小教室 ｜ 第3櫃-第1層(上)
   let displayTitle = '';
   if (shortTag) {
     displayTitle += `[${shortTag}] `;
@@ -739,7 +738,115 @@ function handleLineImageMessage(event) {
   }
 }
 
-// ==================== 4. Session 管理工具 ====================
+// ==================== 4. 🌟 極速盤點引導主卡片 (重構核心) ====================
+function replyFlexStocktakeLauncher(replyToken, userName) {
+  const flexContents = {
+    "type": "bubble",
+    "header": {
+      "type": "box",
+      "layout": "vertical",
+      "backgroundColor": "#ECFDF5",
+      "contents": [
+        { "type": "text", "text": "⚡ 覺風極速盤點中心", "weight": "bold", "size": "xl", "color": "#065F46" },
+        { "type": "text", "text": `${userName} 您好，請選擇最方便的盤點方式：`, "size": "sm", "color": "#047857", "margin": "xs" }
+      ]
+    },
+    "body": {
+      "type": "box",
+      "layout": "vertical",
+      "spacing": "md",
+      "contents": [
+        {
+          "type": "box",
+          "layout": "vertical",
+          "backgroundColor": "#F0FDF4",
+          "borderColor": "#16A34A",
+          "borderWidth": "1.5px",
+          "cornerRadius": "md",
+          "paddingAll": "md",
+          "contents": [
+            { "type": "text", "text": "🌟 方式一：相機掃碼 (最推薦・0.1秒直達)", "weight": "bold", "size": "md", "color": "#15803D" },
+            { "type": "text", "text": "走到櫃架前，對準層板上的 QR Code 掃描，1秒開啟專屬盤點網頁，免選地點！", "size": "xs", "color": "#4B5563", "margin": "xs", "wrap": true },
+            {
+              "type": "button",
+              "style": "primary",
+              "color": "#16A34A",
+              "height": "sm",
+              "margin": "sm",
+              "action": {
+                "type": "uri",
+                "label": "📷 開啟相機 掃描 QR Code",
+                "uri": "https://line.me/R/nv/QRCodeReader"
+              }
+            }
+          ]
+        },
+        {
+          "type": "box",
+          "layout": "vertical",
+          "backgroundColor": "#FEFCE8",
+          "borderColor": "#CA8A04",
+          "borderWidth": "1px",
+          "cornerRadius": "md",
+          "paddingAll": "md",
+          "contents": [
+            { "type": "text", "text": "⚡ 方式二：快拍貼紙 / 輸入短碼", "weight": "bold", "size": "sm", "color": "#854D0E" },
+            { "type": "text", "text": "直接拍照傳送手寫貼紙（如 B3-S1、B5-S3）或在對話框輸入代碼，系統秒跳直達按鈕！", "size": "xs", "color": "#713F12", "margin": "xs", "wrap": true }
+          ]
+        },
+        {
+          "type": "box",
+          "layout": "vertical",
+          "backgroundColor": "#F3F4F6",
+          "cornerRadius": "md",
+          "paddingAll": "md",
+          "contents": [
+            { "type": "text", "text": "🗂️ 方式三：手動選櫃 (無標籤時備用)", "weight": "bold", "size": "sm", "color": "#374151" },
+            { "type": "text", "text": "若所在區域尚未張貼標籤，請點擊下方按鈕依序選擇據點與空間。", "size": "xs", "color": "#6B7280", "margin": "xs", "wrap": true },
+            {
+              "type": "button",
+              "style": "secondary",
+              "height": "sm",
+              "margin": "sm",
+              "action": {
+                "type": "message",
+                "label": "🗂️ 手動選擇據點與空間",
+                "text": "手動選櫃盤點"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "footer": {
+      "type": "box",
+      "layout": "vertical",
+      "contents": [
+        {
+          "type": "button",
+          "style": "secondary",
+          "height": "md",
+          "action": {
+            "type": "message",
+            "label": "🚪 結束盤點 (回主選單)",
+            "text": "結束盤點"
+          }
+        }
+      ]
+    }
+  };
+
+  sendToLine({
+    replyToken: replyToken,
+    messages: [{
+      "type": "flex",
+      "altText": "⚡ 覺風極速盤點中心",
+      "contents": flexContents
+    }]
+  });
+}
+
+// ==================== 5. Session 管理工具 ====================
 const SessionManager = {
   get: function(userId) {
     const raw = CacheService.getUserCache().get(userId);
@@ -753,8 +860,16 @@ const SessionManager = {
   }
 };
 
-// ==================== 5. 狀態處理策略群 ====================
+// ==================== 6. 狀態處理策略群 ====================
 const StateHandlers = {
+  'STATE_LAUNCHER': function(ctx) {
+    if (ctx.userMessage === '手動選櫃盤點' || ctx.userMessage === '手動選擇據點與空間') {
+      startManualSiteSelection(ctx.replyToken, ctx.lineUid, ctx.userName);
+      return;
+    }
+    replyFlexStocktakeLauncher(ctx.replyToken, ctx.userName);
+  },
+
   'STATE_CHOOSE_SITE': function(ctx) {
     const selectedSite = ctx.userMessage;
     const floors = getFloorsBySite(selectedSite);
@@ -965,7 +1080,7 @@ const StateHandlers = {
   }
 };
 
-// ==================== 6. LINE 訊息路由分流入口 ====================
+// ==================== 7. LINE 訊息路由分流入口 ====================
 function handleLineMessage(event) {
   const replyToken = event.replyToken;
   const lineUid = event.source.userId; 
@@ -1025,11 +1140,12 @@ function handleLineMessage(event) {
     return;
   }
 
-  if (userMessage.startsWith('↩️ 返回') || (typeof BTN_BACK_PREFIX !== 'undefined' && userMessage.startsWith(BTN_BACK_PREFIX))) {
-    if (cachedSession) {
+  // 🌟 返回按鈕處理
+  if (userMessage.startsWith('↩️ 返回') || (typeof UI !== 'undefined' && UI.BTN_BACK_PREFIX && userMessage.startsWith(UI.BTN_BACK_PREFIX))) {
+    if (cachedSession && cachedSession.state !== 'STATE_LAUNCHER') {
       handleGoBack(replyToken, lineUid, cachedSession, myName);
     } else {
-      startNewStocktake(replyToken, lineUid, myName);
+      replyFlexStocktakeLauncher(replyToken, myName);
     }
     return;
   }
@@ -1038,17 +1154,25 @@ function handleLineMessage(event) {
     if (cachedSession) {
       handleSystemCommand(replyToken, lineUid, cachedSession, userMessage, myName);
     } else {
-      startNewStocktake(replyToken, lineUid, myName);
+      replyFlexStocktakeLauncher(replyToken, myName);
     }
     return;
   }
 
-  if (userMessage === '開始盤點' || (typeof CMD_CHANGE_SITE !== 'undefined' && userMessage === CMD_CHANGE_SITE)) {
-    startNewStocktake(replyToken, lineUid, myName);
+  // 🌟 點擊「開始盤點」時，跳出「極速引導主卡片」
+  if (userMessage === '開始盤點' || (typeof CMD !== 'undefined' && CMD.CHANGE_SITE && userMessage === CMD.CHANGE_SITE)) {
+    SessionManager.save(lineUid, { state: 'STATE_LAUNCHER' });
+    replyFlexStocktakeLauncher(replyToken, myName);
     return;
   }
 
-  // 手動輸入標籤代碼（支援 B1~B24，層架 S 或抽屜 D）
+  // 🌟 點擊「手動選櫃盤點」時，才展開據點清單
+  if (userMessage === '手動選櫃盤點' || userMessage === '手動選擇據點與空間') {
+    startManualSiteSelection(replyToken, lineUid, myName);
+    return;
+  }
+
+  // 🌟 手動輸入標籤代碼（支援 B1~B24，層架 S 或抽屜 D，例如 B3-S1、B5-S3）
   const manualTagMatch = userMessage.match(/^B(\d{1,2})[-_/\s]?([SD5])(\d{1,2})$/i);
   if (manualTagMatch) {
     const boxNum = manualTagMatch[1];
@@ -1088,9 +1212,9 @@ function handleLineMessage(event) {
   if (!cachedSession) {
     const skus = findSKU(userMessage);
     if (skus.length > 0) {
-      replyTextMessage(replyToken, `🔍 找到物資【${skus[0]['物品名稱']}】，但您尚未選定盤點格位。\n\n請先點擊下方選單的「📷 開始盤點」選定櫃位與層格，再進行物資盤點與入庫！🙏`);
+      replyTextMessage(replyToken, `🔍 找到物資【${skus[0]['物品名稱']}】，但您尚未選定盤點格位。\n\n請先點擊下方選單的「📷 開始盤點」掃描 QR Code 或輸入層架代碼（如 B3-S1）！🙏`);
     } else {
-      startNewStocktake(replyToken, lineUid, myName);
+      replyFlexStocktakeLauncher(replyToken, myName);
     }
     return;
   }
@@ -1107,11 +1231,12 @@ function handleLineMessage(event) {
     });
   } else {
     writeDebugLog(`未知的 Session 狀態: ${cachedSession.state}`);
-    startNewStocktake(replyToken, lineUid, myName);
+    replyFlexStocktakeLauncher(replyToken, myName);
   }
 }
 
-function startNewStocktake(replyToken, lineUid, myName) {
+// 備用手動階層選單進入點
+function startManualSiteSelection(replyToken, lineUid, myName) {
   const sites = getAllSites(); 
   if (sites.length === 0) {
     replyTextMessage(replyToken, `⚠️ 系統後台 LOC_MASTER 尚未設定任何據點，請先聯繫管理員建檔。`);
