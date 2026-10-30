@@ -2,7 +2,7 @@
  * 模組 2：主程式進入點、Web App RPC、LINE 狀態機與標籤視覺辨識 (2_Main.js)
  */
 
-// ==================== 安全變數取值輔助工具 (不宣告 CONFIG，避免衝突) ====================
+// ==================== 安全變數取值輔助工具 ====================
 function getLineAccessToken() {
   try {
     if (typeof CONFIG !== 'undefined' && CONFIG && CONFIG.LINE_ACCESS_TOKEN) return CONFIG.LINE_ACCESS_TOKEN;
@@ -38,22 +38,55 @@ function doGet(e) {
   
   const cell = params.cell || '';
   let shelf = params.shelf || '';
-  
-  // 自動截取實體層架短碼標籤（如 B2-S3、B5-S3），自動補齊到手機頁面徽章與標題中
+  let space = params.space || '';
+  let box = params.box || '';
+
+  // 1. 提取短碼標籤（如 B3-S1、B2-S3）
+  let shortTag = '';
   if (cell && cell.includes('#')) {
-    const shortTag = cell.split('#')[1].trim();
-    if (shortTag && !shelf.includes(shortTag)) {
-      shelf = `[${shortTag}] ${shelf}`.trim();
-    }
+    shortTag = cell.split('#')[1].trim();
   }
+
+  // 2. 提取/自動補齊空間名稱（大安覺風 地下1樓 小教室）
+  let locName = '';
+  if (space) {
+    locName = space.split('-')[0].trim();
+  }
+  // 智慧辨識保底：若無帶入空間名稱，依 cellCode 代碼前綴自動配對
+  if (!locName || (!locName.includes('小教室') && cell.startsWith('DA-004'))) {
+    locName = '大安覺風 地下1樓 小教室';
+  } else if (!locName && cell.startsWith('DA-009')) {
+    locName = '大安覺風 地下1樓 櫃檯展示區';
+  }
+
+  // 3. 清理 shelf 字串，移除可能殘留的重複前綴
+  let cleanShelf = shelf;
+  if (cleanShelf) {
+    cleanShelf = cleanShelf
+      .replace(/^\[.*?\]\s*/, '')
+      .replace(/大安覺風.*?小教室\s*([｜\-|]\s*)?/, '')
+      .trim();
+  }
+
+  // 4. 🌟 組裝「零思考」直覺定位標籤：[B3-S1] 大安覺風 地下1樓 小教室 ｜ 第3櫃-第1層(上)
+  let displayTitle = '';
+  if (shortTag) {
+    displayTitle += `[${shortTag}] `;
+  }
+  if (locName) {
+    displayTitle += `${locName} ｜ `;
+  }
+  displayTitle += (cleanShelf || '本格位');
+
+  shelf = displayTitle.trim();
 
   template.mode = params.mode || 'inbound';
   template.cell = cell;
   template.uid = params.uid || '';
   template.userName = params.name || '';
   template.shelf = shelf;
-  template.box = params.box || '';
-  template.space = params.space || '';
+  template.box = box;
+  template.space = space;
 
   const title = template.mode === 'stocktake' ? '覺風格位拍照批次盤點' : '覺風物資前置拍照建檔';
 
@@ -536,11 +569,11 @@ function recognizeShelfLabelFromPhoto(base64Data, mimeType) {
   const prompt = `你是一個精準的佛寺書架與儲位標籤辨識專家。請觀察這張照片，尋找貼在書架層板邊緣或抽屜上的白色手寫貼紙或標籤：
 標籤規則：
 1. 格式開頭必定為「B」接 1~2 位數字櫃號（例如 B1 到 B24）。
-2. 連字號「-」後方為層架「S」或抽屜「D」接數字（例如 B3-S2、B5-S3、B6-S3、B7-S1、B22-D1、B24-S2）。
-3. ⚠️ 關鍵筆跡校正：手寫英文字母「S」常被誤認成數字「5」（例如「B3-52」實際上是「B3-S2」、「B5-53」是「B5-S3」、「B6-53」是「B6-S3」）。請務必依規則校正為「S」。
+2. 連字號「-」後方為層架「S」或抽屜「D」接數字（例如 B3-S1、B3-S2、B5-S3、B6-S3、B7-S1、B22-D1、B24-S2）。
+3. ⚠️ 關鍵筆跡校正：手寫英文字母「S」常被誤認成數字「5」（例如「B3-51」實際上是「B3-S1」、「B5-53」是「B5-S3」）。請務必依規則校正為「S」。
 
 若畫面中有此標籤貼紙，請只回傳標準 JSON：
-{"found": true, "code": "B5-S3"}
+{"found": true, "code": "B3-S1"}
 若完全找不到貼紙，請回傳：
 {"found": false, "code": ""}`;
 
@@ -668,7 +701,7 @@ function handleLineImageMessage(event) {
 
     const recognizedCode = recognizeShelfLabelFromPhoto(base64Data, mimeType);
     if (!recognizedCode) {
-      replyTextMessage(replyToken, "⚠️ 未能在照片中看清櫃位標籤貼紙（例如 B3-S2 或 B5-S3）。\n\n💡 請靠近一點、對焦清楚層板邊緣的白底手寫貼紙重新拍照！");
+      replyTextMessage(replyToken, "⚠️ 未能在照片中看清櫃位標籤貼紙（例如 B3-S1 或 B5-S3）。\n\n💡 請靠近一點、對焦清楚層板邊緣的白底手寫貼紙重新拍照！");
       return;
     }
 
@@ -679,14 +712,15 @@ function handleLineImageMessage(event) {
     }
 
     const shortTag = targetShelf.cellCode.includes('#') ? targetShelf.cellCode.split('#')[1].trim() : recognizedCode;
-    const displayShelf = `[${shortTag}] ${targetShelf.shelfName}`;
+    const fullLocName = '大安覺風 地下1樓 小教室';
+    const displayShelf = `[${shortTag}] ${fullLocName} ｜ ${targetShelf.shelfName}`;
 
-    cachedSession.state = STATE.INPUT_SKU;
+    cachedSession.state = 'STATE_INPUT_SKU';
     cachedSession.cellCode = targetShelf.cellCode;
     cachedSession.shelfName = targetShelf.shelfName;
     cachedSession.boxName = targetShelf.boxName;
     cachedSession.zoneId = targetShelf.zoneId;
-    cachedSession.spaceName = targetShelf.zoneName;
+    cachedSession.spaceName = fullLocName;
     SessionManager.save(lineUid, cachedSession, 3600);
 
     const webAppBase = getWebAppUrl();
@@ -696,9 +730,9 @@ function handleLineImageMessage(event) {
       `&name=${encodeURIComponent(myName)}` +
       `&shelf=${encodeURIComponent(displayShelf)}` +
       `&box=${encodeURIComponent(targetShelf.boxName)}` +
-      `&space=${encodeURIComponent(targetShelf.zoneName)}`;
+      `&space=${encodeURIComponent(fullLocName)}`;
 
-    replyFlexSearchPromptCard(replyToken, targetShelf.zoneName, targetShelf.boxName, `【${shortTag}】${targetShelf.shelfName}`, targetShelf.cellCode, false, webAppStocktakeUrl);
+    replyFlexSearchPromptCard(replyToken, fullLocName, targetShelf.boxName, `【${shortTag}】${targetShelf.shelfName}`, targetShelf.cellCode, false, webAppStocktakeUrl);
   } catch (err) {
     writeDebugLog("handleLineImageMessage 錯誤: " + err.message);
     replyTextMessage(replyToken, "❌ 圖片辨識處理異常，請稍後重試。");
@@ -721,7 +755,7 @@ const SessionManager = {
 
 // ==================== 5. 狀態處理策略群 ====================
 const StateHandlers = {
-  [STATE.CHOOSE_SITE]: function(ctx) {
+  'STATE_CHOOSE_SITE': function(ctx) {
     const selectedSite = ctx.userMessage;
     const floors = getFloorsBySite(selectedSite);
     if (floors.length === 0) {
@@ -730,14 +764,14 @@ const StateHandlers = {
       replyFlexMenuCard(ctx.replyToken, "⚠️ 查無樓層", `找不到「${selectedSite}」底下的樓層配置，請重新選擇據點：`, menuItems, null);
       return;
     }
-    ctx.session.state = STATE.CHOOSE_FLOOR;
+    ctx.session.state = 'STATE_CHOOSE_FLOOR';
     ctx.session.siteName = selectedSite;
     SessionManager.save(ctx.lineUid, ctx.session);
     const floorItems = floors.map(f => ({ title: f, desc: `${selectedSite} ${f}`, value: f }));
     replyFlexMenuCard(ctx.replyToken, "🏛️ 選擇所在樓層", `已選擇據點：${selectedSite}\n請點選所在【樓層】：`, floorItems, `↩️ 返回 [選擇據點]`);
   },
 
-  [STATE.CHOOSE_FLOOR]: function(ctx) {
+  'STATE_CHOOSE_FLOOR': function(ctx) {
     const selectedFloor = ctx.userMessage;
     const details = getDetailsBySiteAndFloor(ctx.session.siteName, selectedFloor);
     if (details.length === 0) {
@@ -746,14 +780,14 @@ const StateHandlers = {
       replyFlexMenuCard(ctx.replyToken, "⚠️ 查無空間", `找不到「${ctx.session.siteName} ${selectedFloor}」的空間配置，請重新選擇樓層：`, floorItems, `↩️ 返回 [選擇據點]`);
       return;
     }
-    ctx.session.state = STATE.CHOOSE_LOC;
+    ctx.session.state = 'STATE_CHOOSE_LOC';
     ctx.session.floorName = selectedFloor;
     SessionManager.save(ctx.lineUid, ctx.session);
     const spaceItems = details.map(d => ({ title: d.space_name, desc: `${ctx.session.siteName} ${selectedFloor} - ${d.space_name}`, value: d.loc_id }));
     replyFlexMenuCard(ctx.replyToken, "🏢 選擇具體空間", `已選擇：${ctx.session.siteName} ${selectedFloor}\n請點選具體【空間/展示區】：`, spaceItems, `↩️ 返回 [${ctx.session.siteName} 樓層]`);
   },
 
-  [STATE.CHOOSE_LOC]: function(ctx) {
+  'STATE_CHOOSE_LOC': function(ctx) {
     const locId = ctx.userMessage.toUpperCase();
     const zones = getZonesByLocation(locId); 
     const currentLocInfo = getLocationInfoById(locId);
@@ -764,17 +798,17 @@ const StateHandlers = {
       replyFlexMenuCard(ctx.replyToken, "⚠️ 查無櫃位", `找不到「${spaceName}」下的櫃位明細。請重新點選：`, spaceItems, `↩️ 返回 [${ctx.session.siteName} 樓層]`);
       return;
     }
-    ctx.session.state = STATE.CHOOSE_ZONE;
+    ctx.session.state = 'STATE_CHOOSE_ZONE';
     ctx.session.locId = locId;
     ctx.session.spaceName = spaceName;
     SessionManager.save(ctx.lineUid, ctx.session);
     const zoneItems = zones.map(z => ({ title: z.zone_name, desc: `${spaceName} - ${z.zone_name}`, value: z.zone_id }));
 
-    const promptDesc = `已鎖定空間：【${spaceName}】！\n\n📸 極速盤點：直接對準眼前櫃架貼紙拍照（如 B3-S2、B5-S3、B22-D1）即可秒開盤點！\n\n亦可點選下方區域手動選櫃：`;
+    const promptDesc = `已鎖定空間：【${spaceName}】！\n\n📸 極速盤點：直接對準眼前櫃架貼紙拍照（如 B3-S1、B5-S3、B22-D1）即可秒開盤點！\n\n亦可點選下方區域手動選櫃：`;
     replyFlexMenuCard(ctx.replyToken, "🗄️ 選擇櫃位區域", promptDesc, zoneItems, `↩️ 返回 [${ctx.session.floorName || "樓層空間"}]`);
   },
 
-  [STATE.CHOOSE_ZONE]: function(ctx) {
+  'STATE_CHOOSE_ZONE': function(ctx) {
     const zoneId = ctx.userMessage.toUpperCase();
     const boxes = parseBoxesFromZone(zoneId); 
     const zoneName = getZoneNameById(zoneId);
@@ -784,17 +818,17 @@ const StateHandlers = {
       replyFlexMenuCard(ctx.replyToken, "❌ 查無櫃子", `找不到「${zoneName}」的空間配置。請重新點選：`, zoneItems, `↩️ 返回 [${ctx.session.spaceName || "空間清單"}]`);
       return;
     }
-    ctx.session.state = STATE.CHOOSE_BOX;
+    ctx.session.state = 'STATE_CHOOSE_BOX';
     ctx.session.zoneId = zoneId;
     ctx.session.zoneName = zoneName;
     SessionManager.save(ctx.lineUid, ctx.session); 
 
     const boxItems = boxes.map(b => ({ title: b.display_label, desc: `點擊進入 ${b.display_label}`, value: b.display_label }));
-    const promptDesc = `已鎖定分區：【${zoneName}】\n\n📸 推薦快拍：直接拍照傳送層板標籤（如 B3-S2 或 B5-S3）直達盤點！\n\n或點選下方按鈕手動選櫃：`;
+    const promptDesc = `已鎖定分區：【${zoneName}】\n\n📸 推薦快拍：直接拍照傳送層板標籤（如 B3-S1 或 B5-S3）直達盤點！\n\n或點選下方按鈕手動選櫃：`;
     replyFlexMenuCard(ctx.replyToken, "🗃️ 選擇盤點櫃子", promptDesc, boxItems, `↩️ 返回 [${ctx.session.spaceName || "空間清單"}]`);
   },
 
-  [STATE.CHOOSE_BOX]: function(ctx) {
+  'STATE_CHOOSE_BOX': function(ctx) {
     const selectedBoxStr = ctx.userMessage;
     const selectedBoxId = selectedBoxStr.split('-')[0].toUpperCase().trim();
     const shelves = parseShelvesFromBox(ctx.session.zoneId, selectedBoxId); 
@@ -804,7 +838,7 @@ const StateHandlers = {
       replyFlexMenuCard(ctx.replyToken, "❌ 查無層格", `找不到該櫃子配置，請重新選擇櫃子：`, boxItems, `↩️ 返回 [${ctx.session.zoneName || "櫃位分區"}]`);
       return;
     }
-    ctx.session.state = STATE.CHOOSE_CELL;
+    ctx.session.state = 'STATE_CHOOSE_CELL';
     ctx.session.boxId = selectedBoxId;
     ctx.session.boxName = selectedBoxStr;
     SessionManager.save(ctx.lineUid, ctx.session);
@@ -812,7 +846,7 @@ const StateHandlers = {
     replyFlexMenuCard(ctx.replyToken, "🚪 選擇盤點層格", `已對齊櫃體：【${selectedBoxStr}】\n📸 亦可直接拍照傳送層架標籤！\n或點選具體【層格】：`, shelfItems, `↩️ 返回 [${ctx.session.zoneName || "櫃位分區"}]`);
   },
 
-  [STATE.CHOOSE_CELL]: function(ctx) {
+  'STATE_CHOOSE_CELL': function(ctx) {
     const cellCode = ctx.userMessage.toUpperCase().trim();
     const validShelves = parseShelvesFromBox(ctx.session.zoneId, ctx.session.boxId);
     const matchedShelf = validShelves.find(s => s.cell_code.toUpperCase().trim() === cellCode);
@@ -827,9 +861,10 @@ const StateHandlers = {
     }
 
     const shortTag = cellCode.includes('#') ? cellCode.split('#')[1].trim() : cellCode;
-    const displayShelf = `[${shortTag}] ${matchedShelf.name}`;
+    const fullLocName = '大安覺風 地下1樓 小教室';
+    const displayShelf = `[${shortTag}] ${fullLocName} ｜ ${matchedShelf.name}`;
 
-    ctx.session.state = STATE.INPUT_SKU;
+    ctx.session.state = 'STATE_INPUT_SKU';
     ctx.session.cellCode = cellCode;
     ctx.session.shelfName = matchedShelf.name;
     SessionManager.save(ctx.lineUid, ctx.session);
@@ -841,12 +876,12 @@ const StateHandlers = {
       `&name=${encodeURIComponent(ctx.userName)}` +
       `&shelf=${encodeURIComponent(displayShelf)}` +
       `&box=${encodeURIComponent(ctx.session.boxName || '')}` +
-      `&space=${encodeURIComponent(ctx.session.spaceName || '')}`;
+      `&space=${encodeURIComponent(fullLocName)}`;
 
-    replyFlexSearchPromptCard(ctx.replyToken, ctx.session.spaceName, ctx.session.boxName, `【${shortTag}】${matchedShelf.name}`, cellCode, false, webAppStocktakeUrl);
+    replyFlexSearchPromptCard(ctx.replyToken, fullLocName, ctx.session.boxName, `【${shortTag}】${matchedShelf.name}`, cellCode, false, webAppStocktakeUrl);
   },
 
-  [STATE.INPUT_SKU]: function(ctx) {
+  'STATE_INPUT_SKU': function(ctx) {
     const skus = findSKU(ctx.userMessage);
     ctx.session.pendingItemName = ctx.userMessage;
 
@@ -862,7 +897,7 @@ const StateHandlers = {
     }
 
     const targetSku = skus[0];
-    ctx.session.state = STATE.INPUT_QTY;
+    ctx.session.state = 'STATE_INPUT_QTY';
     ctx.session.skuId = (targetSku['品項編號'] || targetSku['sku_id'] || targetSku['SKU_ID'] || '').toString();
     ctx.session.itemName = (targetSku['物品名稱'] || targetSku['品名'] || targetSku['name'] || '').toString();
     SessionManager.save(ctx.lineUid, ctx.session);
@@ -870,7 +905,7 @@ const StateHandlers = {
     replyFlexConfirmSingleSkuCard(ctx.replyToken, targetSku, ctx.userName);
   },
 
-  [STATE.INPUT_QTY]: function(ctx) {
+  'STATE_INPUT_QTY': function(ctx) {
     if (ctx.userMessage === ctx.session.skuId) {
       replyTextMessage(ctx.replyToken, `請在對話框中直接輸入本次盤點的【實清數量】數字（例如：5）：`);
       return;
@@ -884,7 +919,7 @@ const StateHandlers = {
     
     const success = executeUpdateStockWorkflow(ctx.userId, ctx.session.cellCode, ctx.session.skuId, ctx.session.itemName, qty);
     if (success) {
-      ctx.session.state = STATE.POST_STOCKTAKE;
+      ctx.session.state = 'STATE_POST_STOCKTAKE';
       ctx.session.lastSkuId = ctx.session.skuId;
       ctx.session.lastItemName = ctx.session.itemName;
       ctx.session.lastQty = qty;
@@ -897,19 +932,19 @@ const StateHandlers = {
     }
   },
 
-  [STATE.CORRECT_ITEM_NAME]: function(ctx) {
+  'STATE_CORRECT_ITEM_NAME': function(ctx) {
     const newCorrectName = ctx.userMessage;
     correctLastItemName(ctx.session.lastSkuId, newCorrectName, ctx.session.cellCode);
     ctx.session.lastItemName = newCorrectName;
     ctx.session.itemName = newCorrectName;
-    ctx.session.state = STATE.POST_STOCKTAKE;
+    ctx.session.state = 'STATE_POST_STOCKTAKE';
     SessionManager.save(ctx.lineUid, ctx.session, 1800);
 
     const locTextName = `${ctx.session.siteName || ""} ${ctx.session.floorName || ""} ${ctx.session.spaceName || ""} - ${ctx.session.boxName || ""} (${ctx.session.shelfName || ""})`;
     replyCorrectionSuccessWithMonk(ctx.replyToken, ctx.userName, locTextName, ctx.session.cellCode, newCorrectName, ctx.session.lastQty, ctx.session.boxName, `品項名稱已更新為【${newCorrectName}】！`);
   },
 
-  [STATE.CORRECT_QTY]: function(ctx) {
+  'STATE_CORRECT_QTY': function(ctx) {
     const newCorrectQty = parseInt(ctx.userMessage, 10);
     if (isNaN(newCorrectQty) || newCorrectQty < 0) {
       replyTextMessage(ctx.replyToken, "❌ 請輸入大於或等於 0 的有效數量數字：");
@@ -918,14 +953,14 @@ const StateHandlers = {
 
     correctLastQty(ctx.session.cellCode, ctx.session.lastSkuId, newCorrectQty);
     ctx.session.lastQty = newCorrectQty;
-    ctx.session.state = STATE.POST_STOCKTAKE;
+    ctx.session.state = 'STATE_POST_STOCKTAKE';
     SessionManager.save(ctx.lineUid, ctx.session, 1800);
 
     const locTextQty = `${ctx.session.siteName || ""} ${ctx.session.floorName || ""} ${ctx.session.spaceName || ""} - ${ctx.session.boxName || ""} (${ctx.session.shelfName || ""})`;
     replyCorrectionSuccessWithMonk(ctx.replyToken, ctx.userName, locTextQty, ctx.session.cellCode, newCorrectQty, ctx.session.boxName, `實清數量已更正為【${newCorrectQty} 本/套】！`);
   },
 
-  [STATE.POST_STOCKTAKE]: function(ctx) {
+  'STATE_POST_STOCKTAKE': function(ctx) {
     handleSystemCommand(ctx.replyToken, ctx.lineUid, ctx.session, ctx.userMessage, ctx.userName);
   }
 };
@@ -941,21 +976,21 @@ function handleLineMessage(event) {
   
   if (!currentVolunteer) {
     if (cachedSession) {
-      if (cachedSession.state === STATE.BINDING_NAME) {
-        cachedSession.state = STATE.BINDING_PHONE;
+      if (cachedSession.state === 'STATE_BINDING_NAME') {
+        cachedSession.state = 'STATE_BINDING_PHONE';
         cachedSession.inputName = userMessage; 
         SessionManager.save(lineUid, cachedSession);
         replyTextMessage(replyToken, `📝 已收到姓名：${userMessage}\n\n第二步：請輸入您在建檔時登記的【手機號碼】末 4 碼（或完整 10 碼）進行身份比對：`);
         return;
       }
       
-      if (cachedSession.state === STATE.BINDING_PHONE) {
+      if (cachedSession.state === 'STATE_BINDING_PHONE') {
         processDualBinding(replyToken, lineUid, cachedSession.inputName, userMessage);
         return;
       }
     }
     
-    SessionManager.save(lineUid, { state: STATE.BINDING_NAME }); 
+    SessionManager.save(lineUid, { state: 'STATE_BINDING_NAME' }); 
     replyTextMessage(replyToken, "🙏 您好！歡迎使用「覺風物資管理系統」。\n\n為確保物資紀錄正確，請先進行志工身份認證。\n\n第一步：請輸入您的【人員姓名】：");
     return;
   }
@@ -977,7 +1012,7 @@ function handleLineMessage(event) {
 
   const isExitCommand = (userMessage === '結束盤點') || 
                         (userMessage === 'CMD_EXIT_STOCKTAKE') || 
-                        (typeof CMD !== 'undefined' && CMD.EXIT_STOCKTAKE && userMessage === CMD.EXIT_STOCKTAKE);
+                        (typeof CMD_EXIT_STOCKTAKE !== 'undefined' && userMessage === CMD_EXIT_STOCKTAKE);
 
   if (isExitCommand) {
     SessionManager.clear(lineUid);
@@ -985,12 +1020,12 @@ function handleLineMessage(event) {
     return;
   }
 
-  if (userMessage === '拍照入庫' || (typeof CMD !== 'undefined' && CMD.TRIGGER_PHOTO_INBOUND && userMessage === CMD.TRIGGER_PHOTO_INBOUND)) {
+  if (userMessage === '拍照入庫' || (typeof CMD_TRIGGER_PHOTO_INBOUND !== 'undefined' && userMessage === CMD_TRIGGER_PHOTO_INBOUND)) {
     replyFlexInboundPromptCard(replyToken, myName);
     return;
   }
 
-  if (userMessage.startsWith('↩️ 返回') || (typeof UI !== 'undefined' && UI.BTN_BACK_PREFIX && userMessage.startsWith(UI.BTN_BACK_PREFIX))) {
+  if (userMessage.startsWith('↩️ 返回') || (typeof BTN_BACK_PREFIX !== 'undefined' && userMessage.startsWith(BTN_BACK_PREFIX))) {
     if (cachedSession) {
       handleGoBack(replyToken, lineUid, cachedSession, myName);
     } else {
@@ -1008,7 +1043,7 @@ function handleLineMessage(event) {
     return;
   }
 
-  if (userMessage === '開始盤點' || (typeof CMD !== 'undefined' && CMD.CHANGE_SITE && userMessage === CMD.CHANGE_SITE)) {
+  if (userMessage === '開始盤點' || (typeof CMD_CHANGE_SITE !== 'undefined' && userMessage === CMD_CHANGE_SITE)) {
     startNewStocktake(replyToken, lineUid, myName);
     return;
   }
@@ -1025,14 +1060,15 @@ function handleLineMessage(event) {
     if (targetShelf) {
       const activeSession = cachedSession || {};
       const shortTag = targetShelf.cellCode.includes('#') ? targetShelf.cellCode.split('#')[1].trim() : formattedTag;
-      const displayShelf = `[${shortTag}] ${targetShelf.shelfName}`;
+      const fullLocName = '大安覺風 地下1樓 小教室';
+      const displayShelf = `[${shortTag}] ${fullLocName} ｜ ${targetShelf.shelfName}`;
 
-      activeSession.state = STATE.INPUT_SKU;
+      activeSession.state = 'STATE_INPUT_SKU';
       activeSession.cellCode = targetShelf.cellCode;
       activeSession.shelfName = targetShelf.shelfName;
       activeSession.boxName = targetShelf.boxName;
       activeSession.zoneId = targetShelf.zoneId;
-      activeSession.spaceName = targetShelf.zoneName;
+      activeSession.spaceName = fullLocName;
       SessionManager.save(lineUid, activeSession, 3600);
 
       const webAppBase = getWebAppUrl();
@@ -1042,9 +1078,9 @@ function handleLineMessage(event) {
         `&name=${encodeURIComponent(myName)}` +
         `&shelf=${encodeURIComponent(displayShelf)}` +
         `&box=${encodeURIComponent(targetShelf.boxName)}` +
-        `&space=${encodeURIComponent(targetShelf.zoneName)}`;
+        `&space=${encodeURIComponent(fullLocName)}`;
 
-      replyFlexSearchPromptCard(replyToken, targetShelf.zoneName, targetShelf.boxName, `【${shortTag}】${targetShelf.shelfName}`, targetShelf.cellCode, false, webAppStocktakeUrl);
+      replyFlexSearchPromptCard(replyToken, fullLocName, targetShelf.boxName, `【${shortTag}】${targetShelf.shelfName}`, targetShelf.cellCode, false, webAppStocktakeUrl);
       return;
     }
   }
@@ -1081,7 +1117,7 @@ function startNewStocktake(replyToken, lineUid, myName) {
     replyTextMessage(replyToken, `⚠️ 系統後台 LOC_MASTER 尚未設定任何據點，請先聯繫管理員建檔。`);
     return;
   }
-  SessionManager.save(lineUid, { state: STATE.CHOOSE_SITE });
+  SessionManager.save(lineUid, { state: 'STATE_CHOOSE_SITE' });
   const menuItems = sites.map(site => ({ title: site, desc: "點擊進入此據點", value: site }));
   replyFlexMenuCard(replyToken, "🙏 選擇盤點據點", `${myName} 您好，請點選您所在的【據點】：`, menuItems, null);
 }
